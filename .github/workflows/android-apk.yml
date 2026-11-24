@@ -30,11 +30,11 @@ jobs:
           docker-images: true
           swap-storage: false
 
-      - name: Checkout RustDesk 1.5.3 source
+      - name: Checkout custom RustDesk source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: rustdesk/rustdesk
-          ref: "1.5.3"
+          repository: shmily377/rustdesk-
+          ref: "custom-1.5.3-android"
           submodules: recursive
           persist-credentials: false
 
