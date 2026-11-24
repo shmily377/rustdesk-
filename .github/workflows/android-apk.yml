@@ -10,6 +10,8 @@ env:
   RUST_VERSION: "1.75"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  CARGO_NDK_VERSION: "3.1.2"
+  NDK_VERSION: "r28c"
 
 jobs:
   build-android-arm64:
@@ -18,7 +20,7 @@ jobs:
 
     steps:
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@cf1e78c50ca91e757bab3edc229027eebfc07871
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: false
           android: false
@@ -36,26 +38,42 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Install bridge dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             clang \
             cmake \
             curl \
-            gcc \
+            gcc-multilib \
             git \
             g++ \
+            g++-multilib \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            libc6-dev \
             libclang-dev \
+            libunwind-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
             libgtk-3-dev \
+            libpulse-dev \
+            libva-dev \
+            libxcb-randr0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxdo-dev \
+            libxfixes-dev \
             llvm-dev \
             nasm \
             ninja-build \
+            openjdk-17-jdk-headless \
             pkg-config \
+            tree \
             wget
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: "1.75"
           components: rustfmt
@@ -99,21 +117,6 @@ jobs:
           git -C "$FLUTTER_ROOT" apply \
             "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
 
-      - name: Install Android dependencies
-        run: |
-          sudo apt-get install -y \
-            openjdk-17-jdk-headless \
-            libasound2-dev \
-            libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev \
-            libpulse-dev \
-            libva-dev \
-            libxcb-randr0-dev \
-            libxcb-shape0-dev \
-            libxcb-xfixes0-dev \
-            libxdo-dev \
-            libxfixes-dev
-
       - name: Setup Android NDK
         uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
         id: setup_ndk
@@ -142,11 +145,19 @@ jobs:
         run: cargo install cargo-ndk --version 3.1.2 --locked
 
       - name: Build RustDesk native library
-        run: ./flutter/ndk_arm64.sh
         shell: bash
         env:
           ANDROID_NDK_HOME: ${{ steps.setup_ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup_ndk.outputs.ndk-path }}
+        run: |
+          NDK_BIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          NDK_SYSROOT="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          export CC_aarch64_linux_android="${NDK_BIN}/aarch64-linux-android21-clang"
+          export CXX_aarch64_linux_android="${NDK_BIN}/aarch64-linux-android21-clang++"
+          export AR_aarch64_linux_android="${NDK_BIN}/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_BIN}/aarch64-linux-android21-clang"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=${NDK_SYSROOT} -I${NDK_SYSROOT}/usr/include/aarch64-linux-android"
+          ./flutter/ndk_arm64.sh
 
       - name: Copy native library
         run: |
