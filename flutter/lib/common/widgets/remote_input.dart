@@ -59,14 +59,6 @@ bool isSpecialHoldDragActive = false;
 // Cache the last focal point to calculate deltas in special hold-drag mode.
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
-class _TwoFingerWheelEvent {
-  final int x;
-  final int y;
-  final int generation;
-  const _TwoFingerWheelEvent(
-      {this.x = 0, this.y = 0, required this.generation});
-}
-
 class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
   final FFI ffi;
@@ -102,21 +94,14 @@ class _RawTouchGestureDetectorRegionState
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
 
-  // Android two-finger scrolling.  Both values are accumulated in logical pixels
-  // and emitted through InputModel.scroll() when a stable threshold is crossed.
-  static const double _twoFingerScrollThreshold = 18.0;
-  static const int _twoFingerScrollIntervalUs = 40000;
-  static const double _twoFingerPinchThreshold = 0.03;
+  // Android two-finger scrolling. Accumulate the focal-point movement and
+  // emit one merged wheel event at a low interval.
+  static const double _twoFingerScrollThreshold = 10.0;
+  static const int _twoFingerScrollIntervalUs = 18000;
   Offset _lastTwoFingerFocalPoint = Offset.zero;
   double _twoFingerScrollIntegralX = 0;
   double _twoFingerScrollIntegralY = 0;
   int _lastTwoFingerScrollTsUs = 0;
-  double _twoFingerScaleAtStart = 1;
-  bool _twoFingerPinching = false;
-  bool _twoFingerScrollSending = false;
-  final List<_TwoFingerWheelEvent> _twoFingerWheelQueue = [];
-  int _twoFingerWheelGeneration = 0;
-
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
 
@@ -479,9 +464,6 @@ class _RawTouchGestureDetectorRegionState
     if (isAndroid && !isDesktop && !isWebDesktop) {
       _lastTwoFingerFocalPoint = d.focalPoint;
       _lastTwoFingerScrollTsUs = 0;
-      _twoFingerScaleAtStart = 1;
-      _twoFingerPinching = false;
-      _twoFingerWheelGeneration++;
 
       // One-finger touch mode sends left-button down. Releasing it when a
       // second finger arrives prevents the old drag from being left active
@@ -506,39 +488,14 @@ class _RawTouchGestureDetectorRegionState
     }
     if (inputModel.isViewOnly) return;
 
-    // If in special drag mode, perform a pan instead of a scale.
-    if (isSpecialHoldDragActive) {
-      // Calculate delta manually to avoid the jumpy behavior.
-      final delta = d.focalPoint - _lastSpecialHoldDragFocalPoint;
-      _lastSpecialHoldDragFocalPoint = d.focalPoint;
-      await ffi.cursorModel.updatePan(delta * 2.0, d.focalPoint, handleTouch);
-      return;
-    }
-
     // Android: use the focal point (two-finger center) for wheel scrolling.
     // Pinch scale and canvas pan are intentionally ignored.
     if (isAndroid && !isDesktop && !isWebDesktop) {
-      // Once either finger pinch/zoom exceeds a small threshold, ignore the
-      // remaining gesture as scrolling. This prevents pinch and zoom from
-      // producing wheel events while preserving subsequent one-finger state.
-      if ((_twoFingerScaleAtStart - d.scale).abs() >
-          _twoFingerPinchThreshold) {
-        _twoFingerPinching = true;
-      }
-      if (_twoFingerPinching) {
-        _twoFingerWheelGeneration++;
-        _twoFingerWheelQueue.clear();
-        _lastTwoFingerFocalPoint = d.focalPoint;
-        _twoFingerScrollIntegralX = 0;
-        _twoFingerScrollIntegralY = 0;
-        return;
-      }
-
       final delta = d.focalPoint - _lastTwoFingerFocalPoint;
       _lastTwoFingerFocalPoint = d.focalPoint;
 
-      // Dominant-axis filtering prevents diagonal pinch/jitter from becoming
-      // simultaneous noisy vertical and horizontal wheel events.
+      // Dominant-axis filtering avoids simultaneous horizontal and vertical
+      // wheel events while the two-finger center moves diagonally.
       if (delta.dx.abs() > delta.dy.abs()) {
         _twoFingerScrollIntegralX += delta.dx;
         _twoFingerScrollIntegralY = 0;
@@ -555,14 +512,13 @@ class _RawTouchGestureDetectorRegionState
 
       if (_twoFingerScrollIntegralY.abs() >= _twoFingerScrollThreshold) {
         final steps = min(
-            3,
+            4,
             (_twoFingerScrollIntegralY.abs() / _twoFingerScrollThreshold)
                 .floor());
         if (steps <= 0) return;
-        final y = _twoFingerScrollIntegralY < 0 ? 1 : -1;
-        for (var i = 0; i < steps; i++) {
-          _enqueueTwoFingerWheelEvent(y: y);
-        }
+        // Natural direction: fingers down => content down; fingers up => content up.
+        final y = _twoFingerScrollIntegralY.sign.toInt();
+        await inputModel.scroll(y * steps);
         _twoFingerScrollIntegralY -=
             _twoFingerScrollIntegralY.sign *
                 steps *
@@ -573,20 +529,28 @@ class _RawTouchGestureDetectorRegionState
 
       if (_twoFingerScrollIntegralX.abs() >= _twoFingerScrollThreshold) {
         final steps = min(
-            3,
+            4,
             (_twoFingerScrollIntegralX.abs() / _twoFingerScrollThreshold)
                 .floor());
         if (steps <= 0) return;
-        final x = _twoFingerScrollIntegralX < 0 ? 1 : -1;
-        for (var i = 0; i < steps; i++) {
-          _enqueueTwoFingerWheelEvent(x: x);
-        }
+        // Natural direction: fingers right => content right; fingers left => content left.
+        final x = _twoFingerScrollIntegralX.sign.toInt();
+        await inputModel.scroll(0, x: x * steps);
         _twoFingerScrollIntegralX =
             _twoFingerScrollIntegralX.sign *
                 (_twoFingerScrollIntegralX.abs() -
                     steps * _twoFingerScrollThreshold);
         _lastTwoFingerScrollTsUs = nowUs;
       }
+      return;
+    }
+
+    // If in special drag mode, perform a pan instead of a scale.
+    if (isSpecialHoldDragActive) {
+      // Calculate delta manually to avoid the jumpy behavior.
+      final delta = d.focalPoint - _lastSpecialHoldDragFocalPoint;
+      _lastSpecialHoldDragFocalPoint = d.focalPoint;
+      await ffi.cursorModel.updatePan(delta * 2.0, d.focalPoint, handleTouch);
       return;
     }
 
@@ -613,83 +577,16 @@ class _RawTouchGestureDetectorRegionState
     }
   }
 
-  void _enqueueTwoFingerWheelEvent({int x = 0, int y = 0}) {
-    _twoFingerWheelQueue.add(_TwoFingerWheelEvent(
-        x: x, y: y, generation: _twoFingerWheelGeneration));
-    unawaited(_drainTwoFingerWheelQueue());
-  }
-
-  Future<void> _drainTwoFingerWheelQueue() async {
-    if (_twoFingerScrollSending) return;
-    _twoFingerScrollSending = true;
-    try {
-      while (_twoFingerWheelQueue.isNotEmpty) {
-        final event = _twoFingerWheelQueue.removeAt(0);
-        if (event.generation != _twoFingerWheelGeneration) continue;
-        try {
-          await inputModel.scroll(event.y, x: event.x);
-        } catch (error) {
-          debugPrint('Failed to send two-finger wheel event: $error');
-        }
-      }
-    } catch (error) {
-      debugPrint('Failed to drain two-finger wheel queue: $error');
-      _twoFingerWheelQueue.clear();
-    } finally {
-      _twoFingerScrollSending = false;
-    }
-  }
-
-  Future<void> _flushTwoFingerScroll() async {
-    if (_twoFingerPinching) return;
-    if (_twoFingerScrollIntegralY.abs() >= _twoFingerScrollThreshold) {
-      final steps =
-          (_twoFingerScrollIntegralY.abs() / _twoFingerScrollThreshold).floor();
-      if (steps <= 0) return;
-      final y = _twoFingerScrollIntegralY < 0 ? 1 : -1;
-      for (var i = 0; i < steps; i++) {
-        _enqueueTwoFingerWheelEvent(y: y);
-      }
-      _twoFingerScrollIntegralY -=
-          _twoFingerScrollIntegralY.sign * steps * _twoFingerScrollThreshold;
-      _lastTwoFingerScrollTsUs = DateTime.now().microsecondsSinceEpoch;
-    } else if (_twoFingerScrollIntegralX.abs() >=
-        _twoFingerScrollThreshold) {
-      final steps =
-          (_twoFingerScrollIntegralX.abs() / _twoFingerScrollThreshold).floor();
-      if (steps <= 0) return;
-      final x = _twoFingerScrollIntegralX < 0 ? 1 : -1;
-      for (var i = 0; i < steps; i++) {
-        _enqueueTwoFingerWheelEvent(x: x);
-      }
-      _twoFingerScrollIntegralX =
-          _twoFingerScrollIntegralX.sign *
-              (_twoFingerScrollIntegralX.abs() -
-                  steps * _twoFingerScrollThreshold);
-      _lastTwoFingerScrollTsUs = DateTime.now().microsecondsSinceEpoch;
-    }
-    await _drainTwoFingerWheelQueue();
-  }
-
-  void _resetTwoFingerScrollState({bool preserveResidual = true}) {
+  void _resetTwoFingerScrollState() {
     _lastTwoFingerFocalPoint = Offset.zero;
-    if (!preserveResidual) {
-      _twoFingerScrollIntegralX = 0;
-      _twoFingerScrollIntegralY = 0;
-    }
+    _twoFingerScrollIntegralX = 0;
+    _twoFingerScrollIntegralY = 0;
     _lastTwoFingerScrollTsUs = 0;
-    _twoFingerScaleAtStart = 1;
-    _twoFingerPinching = false;
   }
 
   onTwoFingerScaleCancel(ScaleEndDetails d) async {
     if (isAndroid && !isDesktop && !isWebDesktop) {
-      await _flushTwoFingerScroll();
-      _resetTwoFingerScrollState(preserveResidual: !_twoFingerPinching);
-      if (_twoFingerPinching) {
-        _twoFingerScrollIntegralX = 0;
-        _twoFingerScrollIntegralY = 0;
-      }
+      _resetTwoFingerScrollState();
       return;
     }
     if (!isSpecialHoldDragActive) {
@@ -702,12 +599,7 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (isAndroid && !isDesktop && !isWebDesktop) {
-      await _flushTwoFingerScroll();
-      _resetTwoFingerScrollState(preserveResidual: !_twoFingerPinching);
-      if (_twoFingerPinching) {
-        _twoFingerScrollIntegralX = 0;
-        _twoFingerScrollIntegralY = 0;
-      }
+      _resetTwoFingerScrollState();
       return;
     }
     if ((isDesktop || isWebDesktop)) {
@@ -728,7 +620,7 @@ class _RawTouchGestureDetectorRegionState
   }
 
   get onHoldDragCancel => null;
-  get onThreeFingerVerticalDragUpdate => ffi.ffiModel.isPeerAndroid
+  get onThreeFingerVerticalDragUpdate => isAndroid || ffi.ffiModel.isPeerAndroid
       ? null
       : (d) {
           _mouseScrollIntegral += d.delta.dy / 4;
