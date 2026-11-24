@@ -185,7 +185,7 @@ jobs:
             ../rustdesk-1.5.3-aarch64.apk
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@ea165f8d65b6d75e5ee00c9bbd1eb6b4f96e11fb
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rustdesk-1.5.3-aarch64-apk
           path: rustdesk-1.5.3-aarch64.apk
