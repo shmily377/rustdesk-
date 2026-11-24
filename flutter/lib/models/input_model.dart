@@ -1609,7 +1609,9 @@ class InputModel {
   void onPointHoverImage(PointerHoverEvent e) {
     _stopFling = true;
     if (isViewOnly && !showMyCursor) return;
-    if (e.kind != ui.PointerDeviceKind.mouse) return;
+    final isStylus = e.kind == ui.PointerDeviceKind.stylus ||
+        e.kind == ui.PointerDeviceKind.invertedStylus;
+    if (e.kind != ui.PointerDeviceKind.mouse && !isStylus) return;
 
     // May fix https://github.com/rustdesk/rustdesk/issues/13009
     if (isIOS && e.synthesized && e.position == Offset.zero && e.buttons == 0) {
@@ -1625,10 +1627,10 @@ class InputModel {
       _relativeMouse.updatePointerRegionTopLeftGlobal(e);
     }
 
-    if (!isPhysicalMouse.value) {
+    if (e.kind == ui.PointerDeviceKind.mouse && !isPhysicalMouse.value) {
       isPhysicalMouse.value = true;
     }
-    if (isPhysicalMouse.value) {
+    if (isPhysicalMouse.value || isStylus) {
       if (!_relativeMouse.handleRelativeMouseMove(e.localPosition)) {
         final canvasPosition = _pointerPositionForRemoteCanvas(e);
         handleMouse(_getMouseEvent(e, _kMouseEventMove), canvasPosition,
@@ -1951,6 +1953,9 @@ class InputModel {
       event.localPosition.dy - mediaData.padding.top - adjustY,
     );
   }
+
+  Offset remoteCanvasPositionForPointer(PointerEvent event) =>
+      _pointerPositionForRemoteCanvas(event);
 
   static Future<Rect?> fillRemoteCoordsAndGetCurFrame(
       List<RemoteWindowCoords> remoteWindowCoords) async {

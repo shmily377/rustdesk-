@@ -102,6 +102,12 @@ class _RawTouchGestureDetectorRegionState
   double _twoFingerScrollIntegralX = 0;
   double _twoFingerScrollIntegralY = 0;
   int _lastTwoFingerScrollTsUs = 0;
+  final Map<int, Offset> _activeTouchPositions = {};
+  Map<int, Offset>? _twoFingerTapStartPositions;
+  int _twoFingerTapStartTsUs = 0;
+  double _twoFingerTapMaxMovement = 0;
+  bool _isTwoFingerTapCandidate = false;
+  bool _twoFingerTapScrollSent = false;
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
 
@@ -128,10 +134,103 @@ class _RawTouchGestureDetectorRegionState
 
   @override
   Widget build(BuildContext context) {
-    return RawGestureDetector(
-      child: widget.child,
-      gestures: makeGestures(context),
+    return Listener(
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      child: RawGestureDetector(
+        child: widget.child,
+        gestures: makeGestures(context),
+      ),
     );
+  }
+
+  bool get _isAndroidMobileClient =>
+      isAndroid && isMobile && !isDesktop && !isWebDesktop;
+
+  bool get _isAndroidTouchMode =>
+      _isAndroidMobileClient && ffiModel.touchMode;
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (event.kind == PointerDeviceKind.touch) {
+      _activeTouchPositions[event.pointer] = event.localPosition;
+      if (_isAndroidTouchMode && _activeTouchPositions.length == 2) {
+        _twoFingerTapStartPositions = Map.of(_activeTouchPositions);
+        _twoFingerTapStartTsUs = DateTime.now().microsecondsSinceEpoch;
+        _twoFingerTapMaxMovement = 0;
+        _twoFingerTapScrollSent = false;
+        _isTwoFingerTapCandidate = true;
+      } else if (_activeTouchPositions.length > 2) {
+        _isTwoFingerTapCandidate = false;
+      }
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (event.kind == PointerDeviceKind.touch &&
+        _activeTouchPositions.containsKey(event.pointer)) {
+      _activeTouchPositions[event.pointer] = event.localPosition;
+      final startPositions = _twoFingerTapStartPositions;
+      if (_isTwoFingerTapCandidate && startPositions != null) {
+        final startPosition = startPositions[event.pointer];
+        if (startPosition != null) {
+          _twoFingerTapMaxMovement = max(
+              _twoFingerTapMaxMovement,
+              (event.localPosition - startPosition).distance);
+        }
+      }
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (event.kind != PointerDeviceKind.touch ||
+        !_activeTouchPositions.containsKey(event.pointer)) {
+      return;
+    }
+    _activeTouchPositions[event.pointer] = event.localPosition;
+    final startPositions = _twoFingerTapStartPositions;
+    if (_isTwoFingerTapCandidate && startPositions != null) {
+      final startPosition = startPositions[event.pointer];
+      if (startPosition != null) {
+        _twoFingerTapMaxMovement = max(
+            _twoFingerTapMaxMovement,
+            (event.localPosition - startPosition).distance);
+      }
+    }
+    _activeTouchPositions.remove(event.pointer);
+
+    if (_activeTouchPositions.isNotEmpty) return;
+
+    final durationUs =
+        DateTime.now().microsecondsSinceEpoch - _twoFingerTapStartTsUs;
+    final shouldTapRight = _isAndroidTouchMode &&
+        _isTwoFingerTapCandidate &&
+        !_twoFingerTapScrollSent &&
+        durationUs <= 250000 &&
+        _twoFingerTapMaxMovement <= 20;
+    _resetTwoFingerTapState();
+    if (shouldTapRight) {
+      unawaited(inputModel.tap(MouseButtons.right));
+      return;
+    }
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _activeTouchPositions.remove(event.pointer);
+    if (_activeTouchPositions.isEmpty) {
+      _resetTwoFingerTapState();
+    } else {
+      _isTwoFingerTapCandidate = false;
+    }
+  }
+
+  void _resetTwoFingerTapState() {
+    _twoFingerTapStartPositions = null;
+    _twoFingerTapStartTsUs = 0;
+    _twoFingerTapMaxMovement = 0;
+    _isTwoFingerTapCandidate = false;
+    _twoFingerTapScrollSent = false;
   }
 
   bool isNotTouchBasedDevice() {
@@ -518,6 +617,7 @@ class _RawTouchGestureDetectorRegionState
         if (steps <= 0) return;
         // Natural direction: fingers down => content down; fingers up => content up.
         final y = _twoFingerScrollIntegralY.sign.toInt();
+        _twoFingerTapScrollSent = true;
         await inputModel.scroll(y * steps);
         _twoFingerScrollIntegralY -=
             _twoFingerScrollIntegralY.sign *
@@ -535,6 +635,7 @@ class _RawTouchGestureDetectorRegionState
         if (steps <= 0) return;
         // Natural direction: fingers right => content right; fingers left => content left.
         final x = _twoFingerScrollIntegralX.sign.toInt();
+        _twoFingerTapScrollSent = true;
         await inputModel.scroll(0, x: x * steps);
         _twoFingerScrollIntegralX =
             _twoFingerScrollIntegralX.sign *
@@ -695,6 +796,14 @@ class _RawTouchGestureDetectorRegionState
   }
 }
 
+bool _isAndroidMobileStylus(PointerEvent event) =>
+    isAndroid &&
+    isMobile &&
+    !isDesktop &&
+    !isWebDesktop &&
+    (event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus);
+
 class RawPointerMouseRegion extends StatelessWidget {
   final InputModel inputModel;
   final Widget child;
@@ -721,12 +830,39 @@ class RawPointerMouseRegion extends StatelessWidget {
       onPointerDown: (evt) {
         onPointerDown?.call(evt);
         inputModel.onPointDownImage(evt);
+        if (_isAndroidMobileStylus(evt)) {
+          inputModel.handleMouse(
+            InputModel.getMouseEventMove(),
+            inputModel.remoteCanvasPositionForPointer(evt),
+          );
+          unawaited(inputModel.sendMouse('down', MouseButtons.left));
+        }
       },
       onPointerUp: (evt) {
         onPointerUp?.call(evt);
         inputModel.onPointUpImage(evt);
+        if (_isAndroidMobileStylus(evt)) {
+          unawaited(inputModel.sendMouse('up', MouseButtons.left));
+        }
       },
-      onPointerMove: inputModel.onPointMoveImage,
+      onPointerCancel: (evt) {
+        if (_isAndroidMobileStylus(evt)) {
+          unawaited(inputModel.sendMouse('up', MouseButtons.left));
+        }
+      },
+      onPointerMove: (evt) {
+        if (_isAndroidMobileStylus(evt)) {
+          final mouseEvent = InputModel.getMouseEventMove();
+          mouseEvent['buttons'] = kPrimaryButton;
+          inputModel.handleMouse(
+            mouseEvent,
+            inputModel.remoteCanvasPositionForPointer(evt),
+            edgeScroll: inputModel.useEdgeScroll,
+          );
+        } else {
+          inputModel.onPointMoveImage(evt);
+        }
+      },
       onPointerSignal: inputModel.onPointerSignalImage,
       onPointerPanZoomStart: inputModel.onPointerPanZoomStart,
       onPointerPanZoomUpdate: inputModel.onPointerPanZoomUpdate,
