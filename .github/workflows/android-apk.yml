@@ -92,6 +92,8 @@ jobs:
 
       - name: Match Flutter bridge dependencies
         run: |
+          cp flutter/pubspec.yaml flutter/pubspec.yaml.original
+          cp flutter/pubspec.lock flutter/pubspec.lock.original
           sed -i 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml
           cd flutter
           flutter pub get
@@ -103,6 +105,12 @@ jobs:
             --dart-output ./flutter/lib/generated_bridge.dart \
             --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+
+      - name: Restore Android dependencies
+        run: |
+          mv flutter/pubspec.yaml.original flutter/pubspec.yaml
+          mv flutter/pubspec.lock.original flutter/pubspec.lock
+          rm -rf flutter/.dart_tool flutter/build
 
       - name: Install Android Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
@@ -176,6 +184,7 @@ jobs:
           sed -i 's/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g' flutter/android/gradle.properties
           sed -i 's/signingConfigs.release/signingConfigs.debug/g' flutter/android/app/build.gradle
           cd flutter
+          flutter pub get
           flutter build apk --release --target-platform android-arm64 --split-per-abi
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
             ../rustdesk-1.5.3-aarch64.apk
