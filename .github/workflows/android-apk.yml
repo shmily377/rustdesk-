@@ -122,8 +122,12 @@ jobs:
       - name: Patch Android Flutter
         run: |
           FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
-          git -C "$FLUTTER_ROOT" apply \
-            "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          PATCH_FILE="$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if git -C "$FLUTTER_ROOT" apply --reverse --check "$PATCH_FILE"; then
+            echo "Flutter patch is already applied"
+          else
+            git -C "$FLUTTER_ROOT" apply "$PATCH_FILE"
+          fi
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
