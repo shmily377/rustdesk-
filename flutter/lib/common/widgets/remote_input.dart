@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -478,7 +479,7 @@ class _RawTouchGestureDetectorRegionState
     if (isAndroid && !isDesktop && !isWebDesktop) {
       _lastTwoFingerFocalPoint = d.focalPoint;
       _lastTwoFingerScrollTsUs = 0;
-      _twoFingerScaleAtStart = d.scale;
+      _twoFingerScaleAtStart = 1;
       _twoFingerPinching = false;
       _twoFingerWheelGeneration++;
 
