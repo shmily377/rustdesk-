@@ -1413,13 +1413,18 @@ class InputModel {
     await sendMouse('up', button);
   }
 
-  /// Send scroll event with scroll distance [y].
-  Future<void> scroll(int y) async {
+  /// Send scroll event with scroll distance [x] and [y].
+  Future<void> scroll(int y, {int x = 0}) async {
     if (isViewCamera) return;
     await bind.sessionSendMouse(
         sessionId: sessionId,
         msg: json
-            .encode(modify({'id': id, 'type': 'wheel', 'y': y.toString()})));
+            .encode(modify({
+              'id': id,
+              'type': 'wheel',
+              'x': x.toString(),
+              'y': y.toString()
+            })));
   }
 
   /// Reset key modifiers to false, including [shift], [ctrl], [alt] and [command].

@@ -217,6 +217,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
     removeSharedStates(widget.id);
+    if (isAndroid) {
+      // Empty the explicit preference list so Android returns to the app's
+      // manifest/default orientation policy instead of forcing all rotations.
+      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    }
     // `on_voice_call_closed` should be called when the connection is ended.
     // The inner logic of `on_voice_call_closed` will check if the voice call is active.
     // Only one client is considered here for now.
@@ -228,6 +233,21 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     }
+  }
+
+  Future<void> _toggleAndroidScreenOrientation() async {
+    if (!isAndroid) return;
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
+    await SystemChrome.setPreferredOrientations(isPortrait
+        ? const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        : const [
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown,
+          ]);
   }
 
   // For client side
@@ -627,7 +647,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                         setState(() => _showEdit = false);
                         showOptions(context, widget.id, gFFI.dialogManager);
                       },
-                    )
+                    ),
+                    if (isAndroid)
+                       IconButton(
+                         color: Colors.white,
+                         tooltip: translate('Rotate screen'),
+                         icon: const Icon(Icons.screen_rotation),
+                         onPressed: _toggleAndroidScreenOrientation,
+                       )
                   ] +
                   (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
                       ? []

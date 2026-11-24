@@ -6,7 +6,7 @@ import 'package:flutter_hbb/common/widgets/remote_input.dart';
 enum GestureState {
   none,
   oneFingerPan,
-  twoFingerScale,
+  twoFingerScale, // Android uses this state for two-finger scrolling
   threeFingerVerticalDrag
 }
 
@@ -27,10 +27,11 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
   GestureDragEndCallback? onOneFingerPanEnd;
   GestureDragCancelCallback? onOneFingerPanCancel;
 
-  // twoFingerScale : scale + pan event
+  // twoFingerScale : scale + pan event (platform-specific handlers may interpret it as scrolling)
   GestureScaleStartCallback? onTwoFingerScaleStart;
   GestureScaleUpdateCallback? onTwoFingerScaleUpdate;
   GestureScaleEndCallback? onTwoFingerScaleEnd;
+  GestureScaleEndCallback? onTwoFingerScaleCancel;
 
   // threeFingerVerticalDrag
   GestureDragStartCallback? onThreeFingerVerticalDragStart;
@@ -46,12 +47,32 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
     onUpdate = (d) {
       _debounceTimer?.cancel();
       if (d.pointerCount == 1 && _currentState != GestureState.oneFingerPan) {
+        if (_currentState == GestureState.twoFingerScale &&
+            onTwoFingerScaleEnd != null) {
+          _currentState = GestureState.none;
+          onTwoFingerScaleEnd!(ScaleEndDetails());
+        }
+        if (_currentState == GestureState.threeFingerVerticalDrag &&
+            onThreeFingerVerticalDragEnd != null) {
+          _currentState = GestureState.none;
+          onThreeFingerVerticalDragEnd!(DragEndDetails());
+        }
         onOneFingerStartDebounce(d);
       } else if (d.pointerCount == 2 &&
           _currentState != GestureState.twoFingerScale) {
+        if (_currentState == GestureState.threeFingerVerticalDrag &&
+            onThreeFingerVerticalDragEnd != null) {
+          _currentState = GestureState.none;
+          onThreeFingerVerticalDragEnd!(DragEndDetails());
+        }
         onTwoFingerStartDebounce(d);
       } else if (d.pointerCount == 3 &&
           _currentState != GestureState.threeFingerVerticalDrag) {
+        if (_currentState == GestureState.twoFingerScale &&
+            onTwoFingerScaleEnd != null) {
+          _currentState = GestureState.none;
+          onTwoFingerScaleEnd!(ScaleEndDetails());
+        }
         _currentState = GestureState.threeFingerVerticalDrag;
         if (onThreeFingerVerticalDragStart != null) {
           onThreeFingerVerticalDragStart!(
@@ -114,9 +135,9 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
         default:
           break;
       }
-      _debounceTimer = Timer(Duration(milliseconds: 200), () {
-        _currentState = GestureState.none;
-      });
+      // Reset immediately so the next single-finger gesture cannot be blocked
+      // by the previous two-finger state.
+      _currentState = GestureState.none;
     };
   }
 
@@ -181,7 +202,9 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
         }
         break;
       case GestureState.twoFingerScale:
-        // Reset scale state if needed, currently self-contained
+        if (onTwoFingerScaleCancel != null) {
+          onTwoFingerScaleCancel!(ScaleEndDetails());
+        }
         break;
       case GestureState.threeFingerVerticalDrag:
         // Reset drag state if needed, currently self-contained
