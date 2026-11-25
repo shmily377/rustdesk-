@@ -644,27 +644,63 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                 return Row(
                                   crossAxisAlignment: CrossAxisAlignment.stretch,
                                   children: [
-                                    Expanded(child: mobileCanvas),
-                                    SizedBox(
-                                      width: 56,
+                                    Expanded(
                                       child: LayoutBuilder(
-                                        builder: (context, constraints) =>
-                                            RotatedBox(
-                                          quarterTurns: -1,
-                                          child: SizedBox(
-                                            width: constraints.maxHeight,
-                                            height: 56,
-                                            child: _showGestureHelp
-                                                ? getGestureHelp()
-                                                : (_showBar &&
-                                                        gFFI.ffiModel.pi
-                                                            .displays.isNotEmpty
-                                                    ? getBottomAppBar()
-                                                    : Offstage()),
-                                          ),
-                                        ),
+                                        builder: (context, constraints) {
+                                          final panelWidth =
+                                              constraints.maxWidth > 525
+                                                  ? 420.0
+                                                  : constraints.maxWidth * 0.8;
+                                          return Listener(
+                                            onPointerDown: _showGestureHelp
+                                                ? (event) {
+                                                    if (event.localPosition.dx <
+                                                        constraints.maxWidth -
+                                                            panelWidth -
+                                                            8) {
+                                                      setState(() =>
+                                                          _showGestureHelp =
+                                                              false);
+                                                    }
+                                                  }
+                                                : null,
+                                            child: Stack(
+                                              children: [
+                                                Positioned.fill(
+                                                    child: mobileCanvas),
+                                                if (_showGestureHelp)
+                                                  Positioned(
+                                                    top: 0,
+                                                    bottom: 0,
+                                                    right: 8,
+                                                    width: panelWidth,
+                                                    child: Center(
+                                                      child:
+                                                          getLandscapeGestureHelp(
+                                                        Size(
+                                                            panelWidth,
+                                                            constraints
+                                                                    .maxHeight *
+                                                                0.8),
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          );
+                                        },
                                       ),
                                     ),
+                                    SafeArea(
+                                      child: _showBar &&
+                                              gFFI.ffiModel.pi.displays
+                                                  .isNotEmpty
+                                          ? SizedBox(
+                                              width: 56,
+                                              child: getLandscapeToolbar(),
+                                            )
+                                          : Offstage(),
+                                    )
                                   ],
                                 );
                               }
@@ -702,109 +738,101 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   Widget getBottomAppBar() {
-    final ffiModel = Provider.of<FfiModel>(context);
     return BottomAppBar(
       elevation: 10,
       color: MyTheme.accent,
       child: Row(
-        mainAxisSize: MainAxisSize.max,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          Row(
-              children: <Widget>[
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.clear),
-                      onPressed: () {
-                        clientClose(sessionId, gFFI);
-                      },
-                    ),
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.tv),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showOptions(context, widget.id, gFFI.dialogManager);
-                      },
-                    ),
-                    if (isAndroid)
-                       IconButton(
-                         color: Colors.white,
-                         tooltip: translate('Rotate screen'),
-                         icon: const Icon(Icons.screen_rotation),
-                         onPressed: _toggleAndroidScreenOrientation,
-                       )
-                  ] +
-                  (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                      ? []
-                      : gFFI.ffiModel.isPeerAndroid
-                          ? [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                color: Colors.white,
-                                icon: const Icon(Icons.build),
-                                onPressed: () => gFFI.dialogManager
-                                    .toggleMobileActionsOverlay(ffi: gFFI),
-                              )
-                            ]
-                          : [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                color: Colors.white,
-                                icon: Icon(gFFI.ffiModel.touchMode
-                                    ? Icons.touch_app
-                                    : Icons.mouse),
-                                onPressed: () => setState(
-                                    () => _showGestureHelp = !_showGestureHelp),
-                              ),
-                            ]) +
-                  (isWeb
-                      ? []
-                      : <Widget>[
-                          futureBuilder(
-                              future: gFFI.invokeMethod(
-                                  "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
-                              hasData: (isSupportVoiceCall) => IconButton(
-                                    color: Colors.white,
-                                    icon: isAndroid && isSupportVoiceCall
-                                        ? SvgPicture.asset('assets/chat.svg',
-                                            colorFilter: ColorFilter.mode(
-                                                Colors.white, BlendMode.srcIn))
-                                        : Icon(Icons.message),
-                                    onPressed: () =>
-                                        isAndroid && isSupportVoiceCall
-                                            ? showChatOptions(widget.id)
-                                            : onPressedTextChat(widget.id),
-                                  ))
-                        ]) +
-                  [
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.more_vert),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showActions(widget.id);
-                      },
-                    ),
-                  ]),
-          Obx(() => IconButton(
-                color: Colors.white,
-                icon: Icon(Icons.expand_more),
-                onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
-                    ? null
-                    : () {
-                        setState(() => _showBar = !_showBar);
-                      },
-              )),
-        ],
+        children: _getToolbarButtons(),
       ),
     );
+  }
+
+  Widget getLandscapeToolbar() {
+    return Material(
+      elevation: 10,
+      color: MyTheme.accent,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: _getToolbarButtons(compact: true),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _getToolbarButtons({bool compact = false}) {
+    final ffiModel = Provider.of<FfiModel>(context);
+    IconButton button(IconData icon, VoidCallback? onPressed,
+        {String? tooltip}) {
+      return IconButton(
+        color: Colors.white,
+        tooltip: tooltip,
+        icon: Icon(icon),
+        onPressed: onPressed,
+        padding: compact ? EdgeInsets.zero : null,
+        constraints:
+            compact ? const BoxConstraints.tightFor(width: 48, height: 48) : null,
+      );
+    }
+
+    final buttons = <Widget>[
+      Obx(() => button(
+            Icons.expand_more,
+            gFFI.ffiModel.waitForFirstImage.isTrue
+                ? null
+                : () => setState(() => _showBar = !_showBar),
+          )),
+      button(Icons.clear, () => clientClose(sessionId, gFFI)),
+      button(Icons.tv, () {
+        setState(() => _showEdit = false);
+        showOptions(context, widget.id, gFFI.dialogManager);
+      }),
+    ];
+    if (isAndroid) {
+      buttons.add(button(
+        Icons.screen_rotation,
+        _toggleAndroidScreenOrientation,
+        tooltip: translate('Rotate screen'),
+      ));
+    }
+    if (!isWebDesktop && !ffiModel.viewOnly && ffiModel.keyboard) {
+      buttons.add(button(Icons.keyboard, openKeyboard));
+      if (gFFI.ffiModel.isPeerAndroid) {
+        buttons.add(button(Icons.build, () =>
+            gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI)));
+      } else {
+        buttons.add(button(
+          gFFI.ffiModel.touchMode ? Icons.touch_app : Icons.mouse,
+          () => setState(() => _showGestureHelp = !_showGestureHelp),
+        ));
+      }
+    }
+    if (!isWeb) {
+      buttons.add(futureBuilder(
+        future: gFFI.invokeMethod("get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
+        hasData: (isSupportVoiceCall) => IconButton(
+          color: Colors.white,
+          padding: compact ? EdgeInsets.zero : null,
+          constraints: compact
+              ? const BoxConstraints.tightFor(width: 48, height: 48)
+              : null,
+          icon: isAndroid && isSupportVoiceCall
+              ? SvgPicture.asset('assets/chat.svg',
+                  colorFilter:
+                      ColorFilter.mode(Colors.white, BlendMode.srcIn))
+              : const Icon(Icons.message),
+          onPressed: () => isAndroid && isSupportVoiceCall
+              ? showChatOptions(widget.id)
+              : onPressedTextChat(widget.id),
+        ),
+      ));
+    }
+    buttons.add(button(Icons.more_vert, () {
+      setState(() => _showEdit = false);
+      showActions(widget.id);
+    }));
+    return buttons;
   }
 
   bool get showCursorPaint =>
@@ -1078,16 +1106,40 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         child: SingleChildScrollView(
             controller: ScrollController(),
             padding: EdgeInsets.symmetric(vertical: 10),
-            child: GestureHelp(
-              touchMode: gFFI.ffiModel.touchMode,
-              onTouchModeChange: (t) {
-                gFFI.ffiModel.toggleTouchMode();
-                final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
-                bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
-              },
-              virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
-              inputModel: gFFI.inputModel,
-            )));
+            child: _buildGestureHelp()));
+  }
+
+  Widget getLandscapeGestureHelp(Size size) {
+    final mediaData = MediaQuery.of(context);
+    return Material(
+      color: MyTheme.accent,
+      elevation: 10,
+      borderRadius: BorderRadius.circular(8),
+      clipBehavior: Clip.antiAlias,
+      child: MediaQuery(
+        data: mediaData.copyWith(size: size),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: size.height),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: _buildGestureHelp(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGestureHelp() {
+    return GestureHelp(
+      touchMode: gFFI.ffiModel.touchMode,
+      onTouchModeChange: (t) {
+        gFFI.ffiModel.toggleTouchMode();
+        final v = gFFI.ffiModel.touchMode ? 'Y' : 'N';
+        bind.mainSetLocalOption(key: kOptionTouchMode, value: v);
+      },
+      virtualMouseMode: gFFI.ffiModel.virtualMouseMode,
+      inputModel: gFFI.inputModel,
+    );
   }
 
   // * Currently mobile does not enable map mode
