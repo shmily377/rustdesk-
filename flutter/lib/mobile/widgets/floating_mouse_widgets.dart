@@ -35,9 +35,11 @@ const int _kInputTimerIntervalMillis = 100;
 
 class FloatingMouseWidgets extends StatefulWidget {
   final FFI ffi;
+  final bool landscapeToolbarOnLeft;
   const FloatingMouseWidgets({
     super.key,
     required this.ffi,
+    this.landscapeToolbarOnLeft = false,
   });
 
   @override
@@ -83,21 +85,25 @@ class _FloatingMouseWidgetsState extends State<FloatingMouseWidgets> {
         FloatingWheel(
           inputModel: _inputModel,
           cursorModel: _cursorModel,
+          toolbarOnLeft: widget.landscapeToolbarOnLeft,
         ),
         if (virtualMouseMode.showVirtualJoystick)
           VirtualJoystick(
             cursorModel: _cursorModel,
             inputModel: _inputModel,
+            toolbarOnLeft: widget.landscapeToolbarOnLeft,
           ),
         FloatingLeftRightButton(
           isLeft: true,
           inputModel: _inputModel,
           cursorModel: _cursorModel,
+          toolbarOnLeft: widget.landscapeToolbarOnLeft,
         ),
         FloatingLeftRightButton(
           isLeft: false,
           inputModel: _inputModel,
           cursorModel: _cursorModel,
+          toolbarOnLeft: widget.landscapeToolbarOnLeft,
         ),
       ],
     );
@@ -107,8 +113,12 @@ class _FloatingMouseWidgetsState extends State<FloatingMouseWidgets> {
 class FloatingWheel extends StatefulWidget {
   final InputModel inputModel;
   final CursorModel cursorModel;
+  final bool toolbarOnLeft;
   const FloatingWheel(
-      {super.key, required this.inputModel, required this.cursorModel});
+      {super.key,
+      required this.inputModel,
+      required this.cursorModel,
+      this.toolbarOnLeft = false});
 
   @override
   State<FloatingWheel> createState() => _FloatingWheelState();
@@ -144,9 +154,11 @@ class _FloatingWheelState extends State<FloatingWheel> {
         MediaQuery.of(context).orientation == Orientation.landscape;
     setState(() {
       _position = Offset(
-        isLandscape
-            ? _kSpaceToHorizontalEdge
-            : size.width - _wheelWidth - _kSpaceToHorizontalEdge,
+        isLandscape && widget.toolbarOnLeft
+            ? size.width - _wheelWidth - _kSpaceToHorizontalEdge
+            : isLandscape
+                ? _kSpaceToHorizontalEdge
+                : size.width - _wheelWidth - _kSpaceToHorizontalEdge,
         isLandscape
             ? _kSpaceToVerticalEdge
             : (size.height - _wheelHeight) / 2,
@@ -156,6 +168,14 @@ class _FloatingWheelState extends State<FloatingWheel> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _updateBlockedRect();
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant FloatingWheel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.toolbarOnLeft != widget.toolbarOnLeft) {
+      _resetPosition();
+    }
   }
 
   void _updateBlockedRect() {
@@ -365,11 +385,13 @@ class FloatingLeftRightButton extends StatefulWidget {
   final bool isLeft;
   final InputModel inputModel;
   final CursorModel cursorModel;
+  final bool toolbarOnLeft;
   const FloatingLeftRightButton(
       {super.key,
       required this.isLeft,
       required this.inputModel,
-      required this.cursorModel});
+      required this.cursorModel,
+      this.toolbarOnLeft = false});
 
   @override
   State<FloatingLeftRightButton> createState() =>
@@ -432,8 +454,23 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     _previousOrientation = currentOrientation;
   }
 
+  @override
+  void didUpdateWidget(covariant FloatingLeftRightButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.toolbarOnLeft != widget.toolbarOnLeft) {
+      _resetPosition(MediaQuery.of(context).orientation);
+    }
+  }
+
   double _getOffsetX(double w) {
     if (MediaQuery.of(context).orientation == Orientation.landscape) {
+      if (widget.toolbarOnLeft) {
+        return w -
+            _kSpaceToHorizontalEdge -
+            _kLeftRightButtonWidth * 2 -
+            8 +
+            (_isLeft ? 0 : _kLeftRightButtonWidth + 8);
+      }
       return _kSpaceToHorizontalEdge +
           (_isLeft ? 0 : _kLeftRightButtonWidth + 8);
     }
@@ -531,7 +568,10 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     double minX = _kSpaceToHorizontalEdge;
     double minY = _kSpaceToVerticalEdge;
     final isLandscape = _previousOrientation == Orientation.landscape;
-    final maxX = isLandscape
+    if (isLandscape && widget.toolbarOnLeft) {
+      minX = max(_kSpaceToHorizontalEdge, size.width - 180);
+    }
+    final maxX = isLandscape && !widget.toolbarOnLeft
         ? min(
             180.0,
             size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge,
@@ -738,11 +778,13 @@ class _QuarterCirclePainter extends CustomPainter {
 class VirtualJoystick extends StatefulWidget {
   final CursorModel cursorModel;
   final InputModel inputModel;
+  final bool toolbarOnLeft;
 
   const VirtualJoystick({
     super.key,
     required this.cursorModel,
     required this.inputModel,
+    this.toolbarOnLeft = false,
   });
 
   @override
@@ -799,11 +841,22 @@ class _VirtualJoystickState extends State<VirtualJoystick> {
     _lastScreenSize = currentScreenSize;
   }
 
+  @override
+  void didUpdateWidget(covariant VirtualJoystick oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.toolbarOnLeft != widget.toolbarOnLeft) {
+      _resetPosition();
+    }
+  }
+
   void _resetPosition() {
     final size = MediaQuery.of(context).size;
     setState(() {
       _position = Offset(
-        _kSpaceToHorizontalEdge + _joystickRadius,
+        MediaQuery.of(context).orientation == Orientation.landscape &&
+                widget.toolbarOnLeft
+            ? size.width - _kSpaceToHorizontalEdge - _joystickRadius
+            : _kSpaceToHorizontalEdge + _joystickRadius,
         size.height * 0.5 + _joystickRadius * 1.5,
       );
       _isInitialized = true;

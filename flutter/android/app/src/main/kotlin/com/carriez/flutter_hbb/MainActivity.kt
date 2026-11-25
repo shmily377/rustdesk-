@@ -290,6 +290,9 @@ class MainActivity : FlutterActivity() {
             if (documentPicker.handle(call, result)) return@setMethodCallHandler
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
+                "get_display_rotation" -> {
+                    result.success(windowManager.defaultDisplay.rotation)
+                }
                 "init_service" -> {
                     Intent(activity, MainService::class.java).also {
                         bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)

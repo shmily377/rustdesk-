@@ -90,9 +90,11 @@ class RemotePage extends StatefulWidget {
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _keyboardHideStyleTimer;
+  Timer? _displayRotationQueryTimer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   bool _autoOrientationDecided = false;
+  bool _landscapeToolbarOnLeft = false;
   String _value = '';
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
@@ -134,6 +136,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      unawaited(_updateAndroidDisplayRotation());
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
@@ -214,6 +217,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.close();
     _timer?.cancel();
     _keyboardHideStyleTimer?.cancel();
+    _displayRotationQueryTimer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
@@ -236,6 +240,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      unawaited(_updateAndroidDisplayRotation());
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (isAndroid) {
+      _displayRotationQueryTimer?.cancel();
+      _displayRotationQueryTimer = Timer(
+        const Duration(milliseconds: 100),
+        () => unawaited(_updateAndroidDisplayRotation()),
+      );
+    }
+  }
+
+  Future<void> _updateAndroidDisplayRotation() async {
+    if (!isAndroid) return;
+    try {
+      final rotation =
+          await gFFI.invokeMethodWithResult<int>("get_display_rotation");
+      final toolbarOnLeft = rotation == 3;
+      if (mounted && toolbarOnLeft != _landscapeToolbarOnLeft) {
+        setState(() => _landscapeToolbarOnLeft = toolbarOnLeft);
+      }
+    } catch (e) {
+      debugPrint("Failed to query Android display rotation: $e");
+      if (mounted && _landscapeToolbarOnLeft) {
+        setState(() => _landscapeToolbarOnLeft = false);
+      }
     }
   }
 
@@ -641,71 +674,68 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                               );
                               if (isAndroid &&
                                   orientation == Orientation.landscape) {
-                                return Row(
-                                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: LayoutBuilder(
-                                        builder: (context, constraints) {
-                                          final panelWidth =
-                                              constraints.maxWidth > 525
-                                                  ? 420.0
-                                                  : constraints.maxWidth * 0.8;
-                                          return Listener(
-                                            onPointerDown: _showGestureHelp
-                                                ? (event) {
-                                                    if (event.localPosition.dx <
-                                                        constraints.maxWidth -
-                                                            panelWidth -
-                                                            8) {
-                                                      setState(() =>
-                                                          _showGestureHelp =
-                                                              false);
-                                                    }
-                                                  }
-                                                : null,
-                                            child: Stack(
-                                              children: [
-                                                Positioned.fill(
-                                                  child: IgnorePointer(
-                                                    ignoring: _showGestureHelp,
-                                                    child: mobileCanvas,
+                                final toolbar = SafeArea(
+                                  child: _showBar &&
+                                          gFFI.ffiModel.pi.displays.isNotEmpty
+                                      ? SizedBox(
+                                          width: 56,
+                                          child: getLandscapeToolbar(),
+                                        )
+                                      : const Offstage(),
+                                );
+                                final canvas = Expanded(
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      final panelWidth =
+                                          constraints.maxWidth > 525
+                                              ? 420.0
+                                              : constraints.maxWidth * 0.8;
+                                      return Listener(
+                                        onPointerDown: _showGestureHelp
+                                            ? (event) {
+                                                if (event.localPosition.dx <
+                                                    constraints.maxWidth -
+                                                        panelWidth -
+                                                        8) {
+                                                  setState(() =>
+                                                      _showGestureHelp = false);
+                                                }
+                                              }
+                                            : null,
+                                        child: Stack(
+                                          children: [
+                                            Positioned.fill(
+                                              child: IgnorePointer(
+                                                ignoring: _showGestureHelp,
+                                                child: mobileCanvas,
+                                              ),
+                                            ),
+                                            if (_showGestureHelp)
+                                              Positioned(
+                                                top: 0,
+                                                bottom: 0,
+                                                right: 8,
+                                                width: panelWidth,
+                                                child: Center(
+                                                  child: getLandscapeGestureHelp(
+                                                    Size(
+                                                        panelWidth,
+                                                        constraints.maxHeight *
+                                                            0.8),
                                                   ),
                                                 ),
-                                                if (_showGestureHelp)
-                                                  Positioned(
-                                                    top: 0,
-                                                    bottom: 0,
-                                                    right: 8,
-                                                    width: panelWidth,
-                                                    child: Center(
-                                                      child:
-                                                          getLandscapeGestureHelp(
-                                                        Size(
-                                                            panelWidth,
-                                                            constraints
-                                                                    .maxHeight *
-                                                                0.8),
-                                                      ),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                    SafeArea(
-                                      child: _showBar &&
-                                              gFFI.ffiModel.pi.displays
-                                                  .isNotEmpty
-                                          ? SizedBox(
-                                              width: 56,
-                                              child: getLandscapeToolbar(),
-                                            )
-                                          : Offstage(),
-                                    )
-                                  ],
+                                              ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                );
+                                return Row(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: _landscapeToolbarOnLeft
+                                      ? [toolbar, canvas]
+                                      : [canvas, toolbar],
                                 );
                               }
                               return mobileCanvas;
@@ -753,26 +783,32 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   Widget getLandscapeToolbar() {
+    final quarterTurns = _landscapeToolbarOnLeft ? 1 : -1;
     return Material(
       elevation: 10,
       color: MyTheme.accent,
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: _getToolbarButtons(compact: true),
+          children: _getToolbarButtons(
+              compact: true, quarterTurns: quarterTurns),
         ),
       ),
     );
   }
 
-  List<Widget> _getToolbarButtons({bool compact = false}) {
+  List<Widget> _getToolbarButtons(
+      {bool compact = false, int quarterTurns = 0}) {
     final ffiModel = Provider.of<FfiModel>(context);
     IconButton button(IconData icon, VoidCallback? onPressed,
         {String? tooltip}) {
       return IconButton(
         color: Colors.white,
         tooltip: tooltip,
-        icon: Icon(icon),
+        icon: RotatedBox(
+          quarterTurns: quarterTurns,
+          child: Icon(icon),
+        ),
         onPressed: onPressed,
         padding: compact ? EdgeInsets.zero : null,
         constraints:
@@ -821,11 +857,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           constraints: compact
               ? const BoxConstraints.tightFor(width: 48, height: 48)
               : null,
-          icon: isAndroid && isSupportVoiceCall
-              ? SvgPicture.asset('assets/chat.svg',
-                  colorFilter:
-                      ColorFilter.mode(Colors.white, BlendMode.srcIn))
-              : const Icon(Icons.message),
+          icon: RotatedBox(
+            quarterTurns: quarterTurns,
+            child: isAndroid && isSupportVoiceCall
+                ? SvgPicture.asset('assets/chat.svg',
+                    colorFilter:
+                        ColorFilter.mode(Colors.white, BlendMode.srcIn))
+                : const Icon(Icons.message),
+          ),
           onPressed: () => isAndroid && isSupportVoiceCall
               ? showChatOptions(widget.id)
               : onPressedTextChat(widget.id),
@@ -891,7 +930,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     ];
     final floatingMouse = gFFI.ffiModel.touchMode
         ? FloatingMouse(ffi: gFFI)
-        : FloatingMouseWidgets(ffi: gFFI);
+        : FloatingMouseWidgets(
+            ffi: gFFI,
+            landscapeToolbarOnLeft: isAndroid && _landscapeToolbarOnLeft,
+          );
 
     return Container(
       color: MyTheme.canvasColor,
