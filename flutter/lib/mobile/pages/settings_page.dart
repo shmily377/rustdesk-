@@ -1335,8 +1335,24 @@ class __DisplayPageState extends State<_DisplayPage> {
         ),
         SettingsSection(
           title: Text(translate('Other Default Options')),
-          tiles:
-              otherDefaultSettings().map((e) => otherRow(e.$1, e.$2)).toList(),
+          tiles: [
+            ...otherDefaultSettings().map((e) => otherRow(e.$1, e.$2)),
+            if (isAndroid)
+              _getPopupDialogRadioEntry(
+                title: 'Toolbar position',
+                list: [
+                  _RadioEntry('Side', 'side'),
+                  _RadioEntry('Bottom', 'bottom'),
+                ],
+                getter: () {
+                  final value =
+                      bind.mainGetLocalOption(key: 'toolbar-position');
+                  return value == 'bottom' ? 'bottom' : 'side';
+                },
+                asyncSetter: (value) => bind.mainSetLocalOption(
+                    key: 'toolbar-position', value: value),
+              ),
+          ],
         ),
       ]),
     );

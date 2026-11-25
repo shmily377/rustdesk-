@@ -90,11 +90,16 @@ class RemotePage extends StatefulWidget {
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _keyboardHideStyleTimer;
+  Timer? _keyboardCanvasShiftTimer;
   Timer? _displayRotationQueryTimer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   bool _autoOrientationDecided = false;
   bool _landscapeToolbarOnLeft = false;
+  bool _keyboardCanvasShiftKeyboardVisible = false;
+  int _keyboardCanvasShiftGeneration = 0;
+  double _keyboardCanvasShift = 0;
+  double _keyboardCanvasShiftSnapshot = 0;
   String _value = '';
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
@@ -217,6 +222,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.close();
     _timer?.cancel();
     _keyboardHideStyleTimer?.cancel();
+    _keyboardCanvasShiftTimer?.cancel();
+    _keyboardCanvasShiftGeneration++;
     _displayRotationQueryTimer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
@@ -357,6 +364,29 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (visible == _keyboardCanvasShiftKeyboardVisible) {
+      if (isAndroid && visible) {
+        _updateKeyboardCanvasShift(_keyboardCanvasShiftGeneration);
+      }
+    } else {
+      _keyboardCanvasShiftKeyboardVisible = visible;
+      final keyboardShiftGeneration = ++_keyboardCanvasShiftGeneration;
+      _keyboardCanvasShiftTimer?.cancel();
+      _keyboardCanvasShiftTimer = null;
+      if (isAndroid) {
+        if (visible) {
+          _keyboardCanvasShiftSnapshot = _keyboardCanvasShift;
+          _updateKeyboardCanvasShift(keyboardShiftGeneration);
+          _keyboardCanvasShiftTimer =
+              Timer.periodic(const Duration(milliseconds: 150), (_) {
+            _updateKeyboardCanvasShift(keyboardShiftGeneration);
+          });
+        } else {
+          _keyboardCanvasShift = _keyboardCanvasShiftSnapshot;
+        }
+      }
+    }
+
     if (!visible) {
       if (isAndroid) {
         unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
@@ -409,6 +439,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     // update for Scaffold
     setState(() {});
+  }
+
+  void _updateKeyboardCanvasShift(int generation) {
+    if (!mounted ||
+        generation != _keyboardCanvasShiftGeneration ||
+        !keyboardVisibilityController.isVisible) {
+      return;
+    }
+    final mediaQuery = MediaQuery.of(context);
+    final keyboardInset = mediaQuery.viewInsets.bottom;
+    if (keyboardInset <= 0) return;
+
+    final canvas = gFFI.canvasModel;
+    final cursorY = canvas.y +
+        canvas.getAdjustY() +
+        gFFI.cursorModel.y * canvas.scale;
+    if (!cursorY.isFinite || cursorY < -9000) return;
+    final visibleBottom = mediaQuery.size.height - keyboardInset - 24;
+    final nextShift =
+        (visibleBottom - cursorY)
+            .clamp(-mediaQuery.size.height, 0.0)
+            .toDouble();
+    if ((_keyboardCanvasShift - nextShift).abs() > 0.5) {
+      setState(() {
+        _keyboardCanvasShift = nextShift;
+      });
+    }
   }
 
   void _handleIOSSoftKeyboardInput(String newValue) {
@@ -577,13 +634,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget _bottomWidget() {
     if (isAndroid &&
-        MediaQuery.of(context).orientation == Orientation.landscape) {
+        MediaQuery.of(context).orientation == Orientation.landscape &&
+        _toolbarPosition != 'bottom') {
       return Offstage();
     }
     if (_showGestureHelp) return getGestureHelp();
     return _showBar && gFFI.ffiModel.pi.displays.isNotEmpty
         ? getBottomAppBar()
         : Offstage();
+  }
+
+  String get _toolbarPosition {
+    return bind.mainGetLocalOption(key: 'toolbar-position') == 'bottom'
+        ? 'bottom'
+        : 'side';
   }
 
   @override
@@ -673,7 +737,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                       ),
                               );
                               if (isAndroid &&
-                                  orientation == Orientation.landscape) {
+                                  orientation == Orientation.landscape &&
+                                  _toolbarPosition != 'bottom') {
                                 final toolbar = SafeArea(
                                   child: _showBar &&
                                           gFFI.ffiModel.pi.displays.isNotEmpty
@@ -936,6 +1001,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         : FloatingMouseWidgets(
             ffi: gFFI,
             landscapeToolbarOnLeft: isAndroid && _landscapeToolbarOnLeft,
+            toolbarPositionBottom: isAndroid && _toolbarPosition == 'bottom',
           );
 
     return Container(
@@ -952,10 +1018,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   child: MediaQuery.removeViewInsets(
                     context: context,
                     removeBottom: true,
-                    child: ImagePaint(ffiModel: gFFI.ffiModel),
+                    child: Transform.translate(
+                      offset: Offset(0, _keyboardCanvasShift),
+                      child: ImagePaint(ffiModel: gFFI.ffiModel),
+                    ),
                   ),
                 )
-              : ImagePaint(ffiModel: gFFI.ffiModel),
+              : Transform.translate(
+                  offset: Offset(0, _keyboardCanvasShift),
+                  child: ImagePaint(ffiModel: gFFI.ffiModel),
+                ),
         ),
         Positioned.fill(
           child: isAndroid
@@ -968,9 +1040,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 ? MediaQuery.removeViewInsets(
                     context: context,
                     removeBottom: true,
-                    child: CursorPaint(widget.id),
+                    child: Transform.translate(
+                      offset: Offset(0, _keyboardCanvasShift),
+                      child: CursorPaint(widget.id),
+                    ),
                   )
-                : CursorPaint(widget.id),
+                : Transform.translate(
+                    offset: Offset(0, _keyboardCanvasShift),
+                    child: CursorPaint(widget.id),
+                  ),
           ),
         Positioned.fill(
           child: isAndroid ? SafeArea(child: floatingMouse) : floatingMouse,
