@@ -867,7 +867,7 @@ class RawPointerMouseRegion extends StatelessWidget {
           inputModel.handleMouse(
             mouseEvent,
             inputModel.remoteCanvasPositionForPointer(evt),
-            edgeScroll: inputModel.useEdgeScroll,
+            edgeScroll: false,
           );
         } else {
           inputModel.onPointMoveImage(evt);
