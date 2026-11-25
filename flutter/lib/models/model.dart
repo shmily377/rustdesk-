@@ -2273,6 +2273,7 @@ class CanvasModel with ChangeNotifier {
   Timer? _timerMobileRestoreCanvasOffset;
   Offset? _offsetBeforeMobileSoftKeyboard;
   double? _scaleBeforeMobileSoftKeyboard;
+  bool _hasOffsetBeforeMobileSoftKeyboard = false;
 
   // `isMobileCanvasChanged` is used to avoid canvas reset when changing the input method
   // after showing the soft keyboard.
@@ -2584,24 +2585,26 @@ class CanvasModel with ChangeNotifier {
     final margin = min(32.0, min(visible.width, visible.height) / 4);
     var dx = 0.0;
     var dy = 0.0;
-    if (getDisplayWidth() * _scale > size.width) {
+    final displayWidth = getDisplayWidth() * _scale;
+    if (displayWidth > size.width) {
       if (cursorPosition.dx < visible.left + margin) {
         dx = (visible.left + margin - cursorPosition.dx) * _scale;
       } else if (cursorPosition.dx > visible.right - margin) {
         dx = (visible.right - margin - cursorPosition.dx) * _scale;
       }
       _x = (_x + dx)
-          .clamp(size.width - getDisplayWidth() * _scale, 0.0)
+          .clamp(size.width - displayWidth, 0.0)
           .toDouble();
     }
-    if (getDisplayHeight() * _scale > size.height) {
+    final displayHeight = getDisplayHeight() * _scale;
+    if (displayHeight > size.height) {
       if (cursorPosition.dy < visible.top + margin) {
         dy = (visible.top + margin - cursorPosition.dy) * _scale;
       } else if (cursorPosition.dy > visible.bottom - margin) {
         dy = (visible.bottom - margin - cursorPosition.dy) * _scale;
       }
       _y = (_y + dy)
-          .clamp(size.height - getDisplayHeight() * _scale, 0.0)
+          .clamp(size.height - displayHeight, 0.0)
           .toDouble();
     }
     if (dx != 0 || dy != 0) {
@@ -2831,6 +2834,7 @@ class CanvasModel with ChangeNotifier {
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = null;
     _scaleBeforeMobileSoftKeyboard = null;
+    _hasOffsetBeforeMobileSoftKeyboard = false;
   }
 
   updateScrollPercent() {
@@ -2863,6 +2867,7 @@ class CanvasModel with ChangeNotifier {
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = Offset(_x, _y);
     _scaleBeforeMobileSoftKeyboard = _scale;
+    _hasOffsetBeforeMobileSoftKeyboard = true;
   }
 
   void restoreMobileOffsetAfterSoftKeyboard() {
@@ -2870,7 +2875,9 @@ class CanvasModel with ChangeNotifier {
     _timerMobileFocusCanvasCursor?.cancel();
     final targetOffset = _offsetBeforeMobileSoftKeyboard;
     final targetScale = _scaleBeforeMobileSoftKeyboard;
-    if (targetOffset == null || targetScale == null) {
+    if (!_hasOffsetBeforeMobileSoftKeyboard ||
+        targetOffset == null ||
+        targetScale == null) {
       return;
     }
     _timerMobileRestoreCanvasOffset = Timer(Duration(milliseconds: 100), () {
@@ -2880,6 +2887,7 @@ class CanvasModel with ChangeNotifier {
       _scale = targetScale;
       _offsetBeforeMobileSoftKeyboard = null;
       _scaleBeforeMobileSoftKeyboard = null;
+      _hasOffsetBeforeMobileSoftKeyboard = false;
       notifyListeners();
     });
   }
