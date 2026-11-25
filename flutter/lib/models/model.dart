@@ -2383,6 +2383,12 @@ class CanvasModel with ChangeNotifier {
   updateSize() => _size = getSize();
 
   updateViewStyle({refreshMousePos = true, notify = true}) async {
+    final preserveMobileOffset = isAndroid &&
+        parent.target?.cursorModel.lastKeyboardIsVisible == true;
+    final savedKeyboardOffset = _offsetBeforeMobileSoftKeyboard;
+    final savedKeyboardScale = _scaleBeforeMobileSoftKeyboard;
+    final previousOffset = Offset(_x, _y);
+    final previousScale = _scale;
     final style = await bind.sessionGetViewStyle(sessionId: sessionId);
     if (style == null) {
       return;
@@ -2434,7 +2440,19 @@ class CanvasModel with ChangeNotifier {
         _scale /= _devicePixelRatio;
       }
     }
-    _resetCanvasOffset(displayWidth, displayHeight);
+    if (preserveMobileOffset) {
+      _x = previousOffset.dx;
+      _y = previousOffset.dy;
+      _scale = previousScale;
+    } else if (isAndroid &&
+        savedKeyboardOffset != null &&
+        savedKeyboardScale != null) {
+      _x = savedKeyboardOffset.dx;
+      _y = savedKeyboardOffset.dy;
+      _scale = savedKeyboardScale;
+    } else {
+      _resetCanvasOffset(displayWidth, displayHeight);
+    }
     final overflow = _x < 0 || y < 0;
     if (_imageOverflow.value != overflow) {
       _imageOverflow.value = overflow;
@@ -2554,11 +2572,47 @@ class CanvasModel with ChangeNotifier {
     }
   }
 
+  void ensureCursorVisible(Offset cursorPosition) {
+    if (!isAndroid ||
+        parent.target?.cursorModel.lastKeyboardIsVisible == true ||
+        size.isEmpty) {
+      return;
+    }
+    final visible = parent.target?.cursorModel.getVisibleRect();
+    if (visible == null) return;
+
+    final margin = min(32.0, min(visible.width, visible.height) / 4);
+    var dx = 0.0;
+    var dy = 0.0;
+    if (getDisplayWidth() * _scale > size.width) {
+      if (cursorPosition.dx < visible.left + margin) {
+        dx = (visible.left + margin - cursorPosition.dx) * _scale;
+      } else if (cursorPosition.dx > visible.right - margin) {
+        dx = (visible.right - margin - cursorPosition.dx) * _scale;
+      }
+      _x = (_x + dx)
+          .clamp(size.width - getDisplayWidth() * _scale, 0.0)
+          .toDouble();
+    }
+    if (getDisplayHeight() * _scale > size.height) {
+      if (cursorPosition.dy < visible.top + margin) {
+        dy = (visible.top + margin - cursorPosition.dy) * _scale;
+      } else if (cursorPosition.dy > visible.bottom - margin) {
+        dy = (visible.bottom - margin - cursorPosition.dy) * _scale;
+      }
+      _y = (_y + dy)
+          .clamp(size.height - getDisplayHeight() * _scale, 0.0)
+          .toDouble();
+    }
+    if (dx != 0 || dy != 0) {
+      notifyListeners();
+    }
+  }
+
   void moveDesktopMouse(double x, double y) {
     if (size.width == 0 || size.height == 0) {
       return;
     }
-
     // On mobile platforms, move the canvas with the cursor.
     final dw = getDisplayWidth() * _scale;
     final dh = getDisplayHeight() * _scale;
@@ -3166,7 +3220,9 @@ class CursorModel with ChangeNotifier {
     if (isMobile && _lastKeyboardIsVisible != keyboardIsVisible) {
       if (keyboardIsVisible) {
         parent.target?.canvasModel.saveMobileOffsetBeforeSoftKeyboard();
-        parent.target?.canvasModel.mobileFocusCanvasCursor();
+        if (!isAndroid) {
+          parent.target?.canvasModel.mobileFocusCanvasCursor();
+        }
         parent.target?.canvasModel.isMobileCanvasChanged = false;
       } else {
         parent.target?.canvasModel.restoreMobileOffsetAfterSoftKeyboard();
@@ -3819,6 +3875,9 @@ class CursorModel with ChangeNotifier {
     }
     _x = double.parse(evt['x']);
     _y = double.parse(evt['y']);
+    if (isMobile) {
+      parent.target?.canvasModel.ensureCursorVisible(Offset(_x, _y));
+    }
     try {
       RemoteCursorMovedState.find(id).value = true;
     } catch (e) {

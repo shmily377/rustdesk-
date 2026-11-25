@@ -91,6 +91,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
+  bool _autoOrientationDecided = false;
   String _value = '';
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
@@ -146,6 +147,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
+      unawaited(_autoOrientForRemoteDisplay());
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
       if (gFFI.recordingModel.start) {
@@ -240,6 +242,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final isPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
     await SystemChrome.setPreferredOrientations(isPortrait
+        ? const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        : const [
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown,
+          ]);
+  }
+
+  Future<void> _autoOrientForRemoteDisplay() async {
+    if (!isAndroid || _autoOrientationDecided) return;
+    final rect = gFFI.ffiModel.rect;
+    if (rect == null || rect.width <= 0 || rect.height <= 0) return;
+    _autoOrientationDecided = true;
+    await SystemChrome.setPreferredOrientations(rect.width > rect.height
         ? const [
             DeviceOrientation.landscapeLeft,
             DeviceOrientation.landscapeRight,
@@ -502,11 +520,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     });
   }
 
-  Widget _bottomWidget() => _showGestureHelp
-      ? getGestureHelp()
-      : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
-          ? getBottomAppBar()
-          : Offstage());
+  Widget _bottomWidget() {
+    if (isAndroid &&
+        MediaQuery.of(context).orientation == Orientation.landscape) {
+      return Offstage();
+    }
+    if (_showGestureHelp) return getGestureHelp();
+    return _showBar && gFFI.ffiModel.pi.displays.isNotEmpty
+        ? getBottomAppBar()
+        : Offstage();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -584,7 +607,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                   gFFI.canvasModel.updateViewStyle();
                                 });
                               }
-                              return Container(
+                              final mobileCanvas = Container(
                                 color: MyTheme.canvasColor,
                                 child: inputModel.isPhysicalMouse.value
                                     ? getBodyForMobile()
@@ -593,6 +616,36 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                         ffi: gFFI,
                                       ),
                               );
+                              if (isAndroid &&
+                                  orientation == Orientation.landscape) {
+                                return Row(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(child: mobileCanvas),
+                                    SizedBox(
+                                      width: 56,
+                                      child: LayoutBuilder(
+                                        builder: (context, constraints) =>
+                                            RotatedBox(
+                                          quarterTurns: -1,
+                                          child: SizedBox(
+                                            width: constraints.maxHeight,
+                                            height: 56,
+                                            child: _showGestureHelp
+                                                ? getGestureHelp()
+                                                : (_showBar &&
+                                                        gFFI.ffiModel.pi
+                                                            .displays.isNotEmpty
+                                                    ? getBottomAppBar()
+                                                    : Offstage()),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              }
+                              return mobileCanvas;
                             }),
                           ),
                   );
