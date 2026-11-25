@@ -1634,7 +1634,7 @@ class InputModel {
       if (!_relativeMouse.handleRelativeMouseMove(e.localPosition)) {
         final canvasPosition = _pointerPositionForRemoteCanvas(e);
         handleMouse(_getMouseEvent(e, _kMouseEventMove), canvasPosition,
-            edgeScroll: useEdgeScroll);
+            edgeScroll: isStylus ? false : useEdgeScroll);
       }
     }
   }

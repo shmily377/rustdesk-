@@ -14,6 +14,8 @@ import 'package:flutter_hbb/models/input_model.dart';
 
 import './gestures.dart';
 
+const _touchOnlyGestureDevices = <PointerDeviceKind>{PointerDeviceKind.touch};
+
 class RawKeyFocusScope extends StatelessWidget {
   final FocusNode? focusNode;
   final ValueChanged<bool>? onFocusChange;
@@ -739,7 +741,8 @@ class _RawTouchGestureDetectorRegionState
       // Official
       TapGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-              () => TapGestureRecognizer(), (instance) {
+              () => TapGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices), (instance) {
         instance
           ..onTapDown = onTapDown
           ..onTapUp = onTapUp
@@ -747,14 +750,16 @@ class _RawTouchGestureDetectorRegionState
       }),
       DoubleTapGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
-              () => DoubleTapGestureRecognizer(), (instance) {
+              () => DoubleTapGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices), (instance) {
         instance
           ..onDoubleTapDown = onDoubleTapDown
           ..onDoubleTap = onDoubleTap;
       }),
       LongPressGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-              () => LongPressGestureRecognizer(), (instance) {
+              () => LongPressGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices), (instance) {
         instance
           ..onLongPressDown = onLongPressDown
           ..onLongPressUp = onLongPressUp
@@ -764,7 +769,8 @@ class _RawTouchGestureDetectorRegionState
       // Customized
       HoldTapMoveGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<HoldTapMoveGestureRecognizer>(
-              () => HoldTapMoveGestureRecognizer(),
+              () => HoldTapMoveGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices),
               (instance) => instance
                 ..onHoldDragStart = onHoldDragStart
                 ..onHoldDragUpdate = onHoldDragUpdate
@@ -772,14 +778,16 @@ class _RawTouchGestureDetectorRegionState
                 ..onHoldDragEnd = onHoldDragEnd),
       DoubleFinerTapGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<DoubleFinerTapGestureRecognizer>(
-              () => DoubleFinerTapGestureRecognizer(), (instance) {
+              () => DoubleFinerTapGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices), (instance) {
         instance
           ..onDoubleFinerTap = onDoubleFinerTap
           ..onDoubleFinerTapDown = onDoubleFinerTapDown;
       }),
       CustomTouchGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<CustomTouchGestureRecognizer>(
-              () => CustomTouchGestureRecognizer(), (instance) {
+              () => CustomTouchGestureRecognizer(
+                  supportedDevices: _touchOnlyGestureDevices), (instance) {
         instance.onOneFingerPanStart =
             (DragStartDetails d) => onOneFingerPanStart(context, d);
         instance
@@ -829,20 +837,22 @@ class RawPointerMouseRegion extends StatelessWidget {
       onPointerHover: inputModel.onPointHoverImage,
       onPointerDown: (evt) {
         onPointerDown?.call(evt);
-        inputModel.onPointDownImage(evt);
         if (_isAndroidMobileStylus(evt)) {
           inputModel.handleMouse(
             InputModel.getMouseEventMove(),
             inputModel.remoteCanvasPositionForPointer(evt),
           );
           unawaited(inputModel.sendMouse('down', MouseButtons.left));
+        } else {
+          inputModel.onPointDownImage(evt);
         }
       },
       onPointerUp: (evt) {
         onPointerUp?.call(evt);
-        inputModel.onPointUpImage(evt);
         if (_isAndroidMobileStylus(evt)) {
           unawaited(inputModel.sendMouse('up', MouseButtons.left));
+        } else {
+          inputModel.onPointUpImage(evt);
         }
       },
       onPointerCancel: (evt) {

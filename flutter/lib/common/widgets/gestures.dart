@@ -3,6 +3,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
 
+final _supportedNonStylusGestureDevices = PointerDeviceKind.values
+    .where((kind) =>
+        kind != PointerDeviceKind.stylus &&
+        kind != PointerDeviceKind.invertedStylus)
+    .toSet();
+
 enum GestureState {
   none,
   oneFingerPan,
@@ -773,19 +779,25 @@ RawGestureDetector getMixinGestureDetector({
         // Official
         TapGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-                () => TapGestureRecognizer(), (instance) {
+                () => TapGestureRecognizer(
+                    supportedDevices: _supportedNonStylusGestureDevices),
+                (instance) {
           instance.onTapUp = onTapUp;
         }),
         DoubleTapGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
-                () => DoubleTapGestureRecognizer(), (instance) {
+                () => DoubleTapGestureRecognizer(
+                    supportedDevices: _supportedNonStylusGestureDevices),
+                (instance) {
           instance
             ..onDoubleTapDown = onDoubleTapDown
             ..onDoubleTap = onDoubleTap;
         }),
         LongPressGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-                () => LongPressGestureRecognizer(), (instance) {
+                () => LongPressGestureRecognizer(
+                    supportedDevices: _supportedNonStylusGestureDevices),
+                (instance) {
           instance
             ..onLongPressDown = onLongPressDown
             ..onLongPress = onLongPress;
@@ -793,7 +805,8 @@ RawGestureDetector getMixinGestureDetector({
         // Customized
         HoldTapMoveGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<HoldTapMoveGestureRecognizer>(
-                () => HoldTapMoveGestureRecognizer(),
+                () => HoldTapMoveGestureRecognizer(
+                    supportedDevices: _supportedNonStylusGestureDevices),
                 (instance) => instance
                   ..onHoldDragStart = onHoldDragStart
                   ..onHoldDragUpdate = onHoldDragUpdate
@@ -801,12 +814,16 @@ RawGestureDetector getMixinGestureDetector({
                   ..onHoldDragEnd = onHoldDragEnd),
         DoubleFinerTapGestureRecognizer: GestureRecognizerFactoryWithHandlers<
                 DoubleFinerTapGestureRecognizer>(
-            () => DoubleFinerTapGestureRecognizer(), (instance) {
+            () => DoubleFinerTapGestureRecognizer(
+                supportedDevices: _supportedNonStylusGestureDevices),
+            (instance) {
           instance.onDoubleFinerTap = onDoubleFinerTap;
         }),
         CustomTouchGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<CustomTouchGestureRecognizer>(
-                () => CustomTouchGestureRecognizer(), (instance) {
+                () => CustomTouchGestureRecognizer(
+                    supportedDevices: _supportedNonStylusGestureDevices),
+                (instance) {
           instance
             ..onOneFingerPanStart = onOneFingerPanStart
             ..onOneFingerPanUpdate = onOneFingerPanUpdate
