@@ -790,8 +790,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: _getToolbarButtons(
-              compact: true, quarterTurns: quarterTurns),
+          children: _landscapeToolbarOnLeft
+              ? _getToolbarButtons(
+                  compact: true, quarterTurns: quarterTurns)
+              : _getToolbarButtons(
+                  compact: true, quarterTurns: quarterTurns).reversed.toList(),
         ),
       ),
     );
@@ -817,12 +820,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
 
     final buttons = <Widget>[
-      Obx(() => button(
-            Icons.expand_more,
-            gFFI.ffiModel.waitForFirstImage.isTrue
-                ? null
-                : () => setState(() => _showBar = !_showBar),
-          )),
       button(Icons.clear, () => clientClose(sessionId, gFFI)),
       button(Icons.tv, () {
         setState(() => _showEdit = false);
@@ -875,6 +872,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       setState(() => _showEdit = false);
       showActions(widget.id);
     }));
+    buttons.add(Obx(() => button(
+          Icons.expand_more,
+          gFFI.ffiModel.waitForFirstImage.isTrue
+              ? null
+              : () => setState(() => _showBar = !_showBar),
+        )));
     return buttons;
   }
 
