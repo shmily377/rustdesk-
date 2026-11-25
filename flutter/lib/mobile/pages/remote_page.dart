@@ -323,7 +323,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   void onSoftKeyboardChanged(bool visible) {
     if (!visible) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      if (isAndroid) {
+        unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+            overlays: []).then((_) async {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          if (mounted) {
+            await gFFI.canvasModel.updateViewStyle();
+          }
+        }));
+      } else {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      }
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -348,9 +358,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _iosKeyboardWorkaroundTimer?.cancel();
       _iosKeyboardWorkaroundTimer = null;
       _timer?.cancel();
+      if (isAndroid) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      }
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        if (!isAndroid) {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+              overlays: SystemUiOverlay.values);
+        }
         _mobileFocusNode.requestFocus();
       });
     }
@@ -513,8 +528,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        if (!isAndroid) {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+              overlays: SystemUiOverlay.values);
+        }
         _mobileFocusNode.requestFocus();
       });
     });
@@ -597,8 +614,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     color: kColorCanvas,
                     child: isWebDesktop
                         ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
+                        : Builder(builder: (context) {
+                            final mobilePage =
                                 OrientationBuilder(builder: (ctx, orientation) {
                               if (_currentOrientation != orientation) {
                                 Timer(const Duration(milliseconds: 200), () {
@@ -647,8 +664,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                 );
                               }
                               return mobileCanvas;
-                            }),
-                          ),
+                            });
+                            return isAndroid
+                                ? mobilePage
+                                : SafeArea(child: mobilePage);
+                          }),
                   );
                 })
               ],
@@ -788,82 +808,93 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       !gFFI.inputModel.relativeMouseMode.value;
 
   Widget getBodyForMobile() {
+    final controls = <Widget>[
+      Positioned(
+        top: 10,
+        right: 10,
+        child: QualityMonitor(gFFI.qualityMonitorModel),
+      ),
+      Obx(() {
+        final chatKeyboardRequested =
+            gFFI.chatModel.softKeyboardRequested.value;
+        return KeyHelpTools(
+            keyboardIsVisible: keyboardVisibilityController.isVisible &&
+                (_showEdit || chatKeyboardRequested),
+            showGestureHelp: _showGestureHelp);
+      }),
+      SizedBox(
+        width: 0,
+        height: 0,
+        child: !_showEdit
+            ? Container()
+            : TextFormField(
+                textInputAction: TextInputAction.newline,
+                autocorrect: false,
+                // Flutter 3.16.9 Android.
+                // `enableSuggestions` causes secure keyboard to be shown.
+                // https://github.com/flutter/flutter/issues/139143
+                // https://github.com/flutter/flutter/issues/146540
+                // enableSuggestions: false,
+                autofocus: true,
+                focusNode: _mobileFocusNode,
+                maxLines: null,
+                controller: _textController,
+                // trick way to make backspace work always
+                keyboardType: TextInputType.multiline,
+                // `onChanged` may be called depending on the input method if this widget is wrapped in
+                // `Focus(onKeyEvent: ..., child: ...)`
+                // For `Backspace` button in the soft keyboard:
+                // en/fr keyboard: the button will not trigger `onKeyEvent` if the text field is not empty.
+                // The button will trigger `onKeyEvent` if the text field is empty.
+                // ko/zh/ja keyboard: the button will trigger `onKeyEvent`
+                // and the event will not popup if `KeyEventResult.handled` is returned.
+                onChanged: handleSoftKeyboardInput,
+              ).workaroundFreezeLinuxMint(),
+      ),
+    ];
+    final floatingMouse = gFFI.ffiModel.touchMode
+        ? FloatingMouse(ffi: gFFI)
+        : FloatingMouseWidgets(ffi: gFFI);
+
     return Container(
-        color: MyTheme.canvasColor,
-        child: Stack(children: () {
-          final paints = [
-            isAndroid
-                ? MediaQuery.removeViewInsets(
+      color: MyTheme.canvasColor,
+      child: Stack(children: [
+        Positioned.fill(
+          child: isAndroid
+              ? MediaQuery.removePadding(
+                  context: context,
+                  removeTop: true,
+                  removeLeft: true,
+                  removeRight: true,
+                  removeBottom: true,
+                  child: MediaQuery.removeViewInsets(
                     context: context,
                     removeBottom: true,
                     child: ImagePaint(ffiModel: gFFI.ffiModel),
-                  )
-                : ImagePaint(ffiModel: gFFI.ffiModel),
-            Positioned(
-              top: 10,
-              right: 10,
-              child: QualityMonitor(gFFI.qualityMonitorModel),
-            ),
-            Obx(() {
-              final chatKeyboardRequested =
-                  gFFI.chatModel.softKeyboardRequested.value;
-              return KeyHelpTools(
-                  keyboardIsVisible: keyboardVisibilityController.isVisible &&
-                      (_showEdit || chatKeyboardRequested),
-                  showGestureHelp: _showGestureHelp);
-            }),
-            SizedBox(
-              width: 0,
-              height: 0,
-              child: !_showEdit
-                  ? Container()
-                  : TextFormField(
-                      textInputAction: TextInputAction.newline,
-                      autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
-                      autofocus: true,
-                      focusNode: _mobileFocusNode,
-                      maxLines: null,
-                      controller: _textController,
-                      // trick way to make backspace work always
-                      keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
-                      onChanged: handleSoftKeyboardInput,
-                    ).workaroundFreezeLinuxMint(),
-            ),
-          ];
-          if (showCursorPaint) {
-            final cursorPaint = CursorPaint(widget.id);
-            paints.add(isAndroid
+                  ),
+                )
+              : ImagePaint(ffiModel: gFFI.ffiModel),
+        ),
+        Positioned.fill(
+          child: isAndroid
+              ? SafeArea(child: Stack(children: controls))
+              : Stack(children: controls),
+        ),
+        if (showCursorPaint)
+          Positioned.fill(
+            child: isAndroid
                 ? MediaQuery.removeViewInsets(
                     context: context,
                     removeBottom: true,
-                    child: cursorPaint,
+                    child: CursorPaint(widget.id),
                   )
-                : cursorPaint);
-          }
-          if (gFFI.ffiModel.touchMode) {
-            paints.add(FloatingMouse(
-              ffi: gFFI,
-            ));
-          } else {
-            paints.add(FloatingMouseWidgets(
-              ffi: gFFI,
-            ));
-          }
-          return paints;
-        }()));
+                : CursorPaint(widget.id),
+          ),
+        Positioned.fill(
+          child: isAndroid ? SafeArea(child: floatingMouse) : floatingMouse,
+        ),
+      ]),
+    );
   }
 
   Widget getBodyForDesktopWithListener() {

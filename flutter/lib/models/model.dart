@@ -2344,8 +2344,12 @@ class CanvasModel with ChangeNotifier {
     double w = size.width - leftToEdge - rightToEdge;
     double h = size.height - topToEdge - bottomToEdge;
     if (isMobile) {
-      // Account for horizontal safe area insets on both orientations.
-      w = w - mediaData.padding.left - mediaData.padding.right;
+      // Android canvas coordinates stay full-screen while system bars toggle.
+      final horizontalPadding = isAndroid
+          ? 0.0
+          : mediaData.padding.left + mediaData.padding.right;
+      final topPadding = isAndroid ? 0.0 : mediaData.padding.top;
+      w = w - horizontalPadding;
       // Android keeps the canvas at its original size while the keyboard covers it.
       final keyboardInset = isAndroid ? 0.0 : mediaData.viewInsets.bottom;
       final bottomOverlay = isAndroid
@@ -2354,11 +2358,11 @@ class CanvasModel with ChangeNotifier {
               0);
       h = h - keyboardInset - bottomOverlay;
       // Orientation-specific handling:
-      //  - Portrait: additionally subtract top padding (e.g. status bar / notch)
+      //  - iOS portrait: additionally subtract top padding (e.g. status bar / notch)
       //  - Landscape: does not subtract mediaData.padding.top/bottom (home indicator auto-hides)
       final isPortrait = size.height > size.width;
       if (isPortrait) {
-        // In portrait mode, subtract the top safe-area padding (e.g. status bar / notch)
+        // On iOS portrait, subtract the top safe-area padding (e.g. status bar / notch)
         // so the remote image is not truncated, while keeping the bottom inset to avoid
         // introducing unnecessary blank space around the canvas.
         //
@@ -2369,7 +2373,7 @@ class CanvasModel with ChangeNotifier {
         //   https://github.com/user-attachments/assets/12a98817-3b4e-43aa-be0f-4b03cf364b7e
         // h = h - top (current): works fine
         //   https://github.com/user-attachments/assets/95f047f2-7f47-4a36-8113-5023989a0c81
-        h = h - mediaData.padding.top;
+        h = h - topPadding;
       }
     }
     return Size(w < 0 ? 0 : w, h < 0 ? 0 : h);
@@ -2383,7 +2387,10 @@ class CanvasModel with ChangeNotifier {
     }
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
-    return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
+    final topPadding = isAndroid
+        ? 0.0
+        : MediaQueryData.fromView(ui.window).padding.top;
+    return max(bottom - topPadding, 0);
   }
 
   updateSize() => _size = getSize();
