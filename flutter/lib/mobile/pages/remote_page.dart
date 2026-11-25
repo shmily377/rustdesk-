@@ -543,6 +543,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         return false;
       },
       child: Scaffold(
+          resizeToAvoidBottomInset: isAndroid ? false : null,
           // workaround for https://github.com/rustdesk/rustdesk/issues/3131
           floatingActionButtonLocation: keyboardIsVisible
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
@@ -791,7 +792,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         color: MyTheme.canvasColor,
         child: Stack(children: () {
           final paints = [
-            ImagePaint(ffiModel: gFFI.ffiModel),
+            isAndroid
+                ? MediaQuery.removeViewInsets(
+                    context: context,
+                    removeBottom: true,
+                    child: ImagePaint(ffiModel: gFFI.ffiModel),
+                  )
+                : ImagePaint(ffiModel: gFFI.ffiModel),
             Positioned(
               top: 10,
               right: 10,
@@ -837,7 +844,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
           ];
           if (showCursorPaint) {
-            paints.add(CursorPaint(widget.id));
+            final cursorPaint = CursorPaint(widget.id);
+            paints.add(isAndroid
+                ? MediaQuery.removeViewInsets(
+                    context: context,
+                    removeBottom: true,
+                    child: cursorPaint,
+                  )
+                : cursorPaint);
           }
           if (gFFI.ffiModel.touchMode) {
             paints.add(FloatingMouse(

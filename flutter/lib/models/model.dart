@@ -2346,12 +2346,13 @@ class CanvasModel with ChangeNotifier {
     if (isMobile) {
       // Account for horizontal safe area insets on both orientations.
       w = w - mediaData.padding.left - mediaData.padding.right;
-      // Vertically, subtract the bottom keyboard inset (viewInsets.bottom) and any
-      // bottom overlay (e.g. key-help tools) so the canvas is not covered.
-      h = h -
-          mediaData.viewInsets.bottom -
-          (parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ??
+      // Android keeps the canvas at its original size while the keyboard covers it.
+      final keyboardInset = isAndroid ? 0.0 : mediaData.viewInsets.bottom;
+      final bottomOverlay = isAndroid
+          ? 0.0
+          : (parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ??
               0);
+      h = h - keyboardInset - bottomOverlay;
       // Orientation-specific handling:
       //  - Portrait: additionally subtract top padding (e.g. status bar / notch)
       //  - Landscape: does not subtract mediaData.padding.top/bottom (home indicator auto-hides)
@@ -2376,6 +2377,10 @@ class CanvasModel with ChangeNotifier {
 
   // mobile only
   double getAdjustY() {
+    if (isAndroid &&
+        parent.target?.cursorModel.lastKeyboardIsVisible == true) {
+      return 0;
+    }
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
     return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
@@ -2878,6 +2883,14 @@ class CanvasModel with ChangeNotifier {
     if (!_hasOffsetBeforeMobileSoftKeyboard ||
         targetOffset == null ||
         targetScale == null) {
+      return;
+    }
+    if (_x == targetOffset.dx &&
+        _y == targetOffset.dy &&
+        _scale == targetScale) {
+      _offsetBeforeMobileSoftKeyboard = null;
+      _scaleBeforeMobileSoftKeyboard = null;
+      _hasOffsetBeforeMobileSoftKeyboard = false;
       return;
     }
     _timerMobileRestoreCanvasOffset = Timer(Duration(milliseconds: 100), () {
