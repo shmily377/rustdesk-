@@ -61,6 +61,67 @@ bool isSpecialHoldDragActive = false;
 // Cache the last focal point to calculate deltas in special hold-drag mode.
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
+class _NaturalScrollAccumulator {
+  static const double threshold = 10.0;
+  static const int intervalUs = 18000;
+
+  double _integralX = 0;
+  double _integralY = 0;
+  int _lastScrollTsUs = 0;
+
+  Future<bool> add(Offset delta, InputModel inputModel) async {
+    if (delta.dx.abs() > delta.dy.abs()) {
+      _integralX += delta.dx;
+      _integralY = 0;
+    } else {
+      _integralY += delta.dy;
+      _integralX = 0;
+    }
+
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    final elapsedUs =
+        _lastScrollTsUs == 0 ? 1000000 : nowUs - _lastScrollTsUs;
+    if (elapsedUs < intervalUs) return false;
+
+    if (_integralY.abs() >= threshold) {
+      final steps = min(4, (_integralY.abs() / threshold).floor());
+      if (steps <= 0) return false;
+      final y = _integralY.sign.toInt();
+      await inputModel.scroll(y * steps);
+      _integralY -= _integralY.sign * steps * threshold;
+      _lastScrollTsUs = nowUs;
+      return true;
+    }
+
+    if (_integralX.abs() >= threshold) {
+      final steps = min(4, (_integralX.abs() / threshold).floor());
+      if (steps <= 0) return false;
+      final x = _integralX.sign.toInt();
+      await inputModel.scroll(0, x: x * steps);
+      _integralX -= _integralX.sign * steps * threshold;
+      _lastScrollTsUs = nowUs;
+      return true;
+    }
+    return false;
+  }
+
+  void reset() {
+    _integralX = 0;
+    _integralY = 0;
+    _lastScrollTsUs = 0;
+  }
+}
+
+class _StylusContact {
+  _StylusContact(this.startPosition)
+      : startTimeUs = DateTime.now().microsecondsSinceEpoch;
+
+  final Offset startPosition;
+  final int startTimeUs;
+  final _NaturalScrollAccumulator scroll = _NaturalScrollAccumulator();
+  bool scrollSent = false;
+}
+
 class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
   final FFI ffi;
@@ -110,6 +171,9 @@ class _RawTouchGestureDetectorRegionState
   double _twoFingerTapMaxMovement = 0;
   bool _isTwoFingerTapCandidate = false;
   bool _twoFingerTapScrollSent = false;
+  final _NaturalScrollAccumulator _singleFingerScroll =
+      _NaturalScrollAccumulator();
+  bool _androidSingleFingerScrollHandled = false;
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
 
@@ -249,6 +313,9 @@ class _RawTouchGestureDetectorRegionState
 
   onTapDown(TapDownDetails d) async {
     lastDeviceKind = d.kind;
+    if (_isAndroidTouchMode) {
+      _androidSingleFingerScrollHandled = false;
+    }
     _lastTapDownGlobalPosition = d.globalPosition;
     if (isNotTouchBasedDevice()) {
       return;
@@ -263,6 +330,11 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onTapUp(TapUpDetails d) async {
+    if (_isAndroidTouchMode && _androidSingleFingerScrollHandled) {
+      _androidSingleFingerScrollHandled = false;
+      _lastTapDownDetails = null;
+      return;
+    }
     final TapDownDetails? lastTapDownDetails = _lastTapDownDetails;
     _lastTapDownDetails = null;
     if (isNotTouchBasedDevice()) {
@@ -481,6 +553,12 @@ class _RawTouchGestureDetectorRegionState
         return;
       }
 
+      if (_isAndroidTouchMode) {
+        _androidSingleFingerScrollHandled = true;
+        _singleFingerScroll.reset();
+        return;
+      }
+
       _touchModePanStarted = true;
       if (isDesktop || isWebDesktop) {
         ffi.cursorModel.trySetRemoteWindowCoords();
@@ -518,6 +596,12 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    if (_isAndroidTouchMode && _androidSingleFingerScrollHandled) {
+      if (!inputModel.isViewOnly) {
+        await _singleFingerScroll.add(d.delta, inputModel);
+      }
+      return;
+    }
     if (ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy)) {
       return;
     }
@@ -534,6 +618,10 @@ class _RawTouchGestureDetectorRegionState
 
   onOneFingerPanEnd(DragEndDetails d) async {
     _touchModePanStarted = false;
+    if (_isAndroidTouchMode && _androidSingleFingerScrollHandled) {
+      _singleFingerScroll.reset();
+      return;
+    }
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -554,6 +642,9 @@ class _RawTouchGestureDetectorRegionState
   // double-click problem on iPad with magic mouse.
   onOneFingerPanCancel() {
     _touchModePanStarted = false;
+    if (_isAndroidTouchMode && _androidSingleFingerScrollHandled) {
+      _singleFingerScroll.reset();
+    }
   }
 
   // scale + pan event
@@ -563,6 +654,9 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (isAndroid && !isDesktop && !isWebDesktop) {
+      if (_isAndroidTouchMode && _androidSingleFingerScrollHandled) {
+        _singleFingerScroll.reset();
+      }
       _lastTwoFingerFocalPoint = d.focalPoint;
       _lastTwoFingerScrollTsUs = 0;
 
@@ -812,7 +906,7 @@ bool _isAndroidMobileStylus(PointerEvent event) =>
     (event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus);
 
-class RawPointerMouseRegion extends StatelessWidget {
+class RawPointerMouseRegion extends StatefulWidget {
   final InputModel inputModel;
   final Widget child;
   final MouseCursor? cursor;
@@ -832,58 +926,76 @@ class RawPointerMouseRegion extends StatelessWidget {
   });
 
   @override
+  State<RawPointerMouseRegion> createState() => _RawPointerMouseRegionState();
+}
+
+class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
+  final Map<int, _StylusContact> _stylusContacts = {};
+
+  @override
   Widget build(BuildContext context) {
     return Listener(
-      onPointerHover: inputModel.onPointHoverImage,
+      onPointerHover: widget.inputModel.onPointHoverImage,
       onPointerDown: (evt) {
-        onPointerDown?.call(evt);
+        widget.onPointerDown?.call(evt);
         if (_isAndroidMobileStylus(evt)) {
-          inputModel.handleMouse(
+          widget.inputModel.handleMouse(
             InputModel.getMouseEventMove(),
-            inputModel.remoteCanvasPositionForPointer(evt),
+            widget.inputModel.remoteCanvasPositionForPointer(evt),
           );
-          unawaited(inputModel.sendMouse('down', MouseButtons.left));
+          _stylusContacts[evt.pointer] = _StylusContact(evt.localPosition);
         } else {
-          inputModel.onPointDownImage(evt);
+          widget.inputModel.onPointDownImage(evt);
         }
       },
       onPointerUp: (evt) {
-        onPointerUp?.call(evt);
+        widget.onPointerUp?.call(evt);
         if (_isAndroidMobileStylus(evt)) {
-          unawaited(inputModel.sendMouse('up', MouseButtons.left));
+          final contact = _stylusContacts.remove(evt.pointer);
+          if (contact != null) {
+            final durationUs =
+                DateTime.now().microsecondsSinceEpoch - contact.startTimeUs;
+            final distance =
+                (evt.localPosition - contact.startPosition).distance;
+            contact.scroll.reset();
+            if (!contact.scrollSent &&
+                durationUs <= 250000 &&
+                distance <= 20) {
+              unawaited(widget.inputModel.tap(MouseButtons.left));
+            }
+          }
         } else {
-          inputModel.onPointUpImage(evt);
+          widget.inputModel.onPointUpImage(evt);
         }
       },
       onPointerCancel: (evt) {
         if (_isAndroidMobileStylus(evt)) {
-          unawaited(inputModel.sendMouse('up', MouseButtons.left));
+          _stylusContacts.remove(evt.pointer)?.scroll.reset();
         }
       },
-      onPointerMove: (evt) {
+      onPointerMove: (evt) async {
         if (_isAndroidMobileStylus(evt)) {
-          final mouseEvent = InputModel.getMouseEventMove();
-          mouseEvent['buttons'] = kPrimaryButton;
-          inputModel.handleMouse(
-            mouseEvent,
-            inputModel.remoteCanvasPositionForPointer(evt),
-            edgeScroll: false,
-          );
+          final contact = _stylusContacts[evt.pointer];
+          if (contact != null && !widget.inputModel.isViewOnly) {
+            final didScroll =
+                await contact.scroll.add(evt.delta, widget.inputModel);
+            contact.scrollSent = contact.scrollSent || didScroll;
+          }
         } else {
-          inputModel.onPointMoveImage(evt);
+          widget.inputModel.onPointMoveImage(evt);
         }
       },
-      onPointerSignal: inputModel.onPointerSignalImage,
-      onPointerPanZoomStart: inputModel.onPointerPanZoomStart,
-      onPointerPanZoomUpdate: inputModel.onPointerPanZoomUpdate,
-      onPointerPanZoomEnd: inputModel.onPointerPanZoomEnd,
+      onPointerSignal: widget.inputModel.onPointerSignalImage,
+      onPointerPanZoomStart: widget.inputModel.onPointerPanZoomStart,
+      onPointerPanZoomUpdate: widget.inputModel.onPointerPanZoomUpdate,
+      onPointerPanZoomEnd: widget.inputModel.onPointerPanZoomEnd,
       child: MouseRegion(
-        cursor: inputModel.isViewOnly
+        cursor: widget.inputModel.isViewOnly
             ? MouseCursor.defer
-            : (cursor ?? MouseCursor.defer),
-        onEnter: onEnter,
-        onExit: onExit,
-        child: child,
+            : (widget.cursor ?? MouseCursor.defer),
+        onEnter: widget.onEnter,
+        onExit: widget.onExit,
+        child: widget.child,
       ),
     );
   }
