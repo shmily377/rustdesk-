@@ -97,6 +97,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _autoOrientationDecided = false;
   bool _landscapeToolbarOnLeft = false;
   bool _keyboardCanvasShiftKeyboardVisible = false;
+  bool _keyboardShiftSnapshotSaved = false;
   int _keyboardCanvasShiftGeneration = 0;
   double _keyboardCanvasShift = 0;
   double _keyboardCanvasShiftSnapshot = 0;
@@ -375,14 +376,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _keyboardCanvasShiftTimer = null;
       if (isAndroid) {
         if (visible) {
-          _keyboardCanvasShiftSnapshot = _keyboardCanvasShift;
+          if (!_keyboardShiftSnapshotSaved) {
+            _keyboardCanvasShiftSnapshot = _keyboardCanvasShift;
+            _keyboardShiftSnapshotSaved = true;
+          }
           _updateKeyboardCanvasShift(keyboardShiftGeneration);
           _keyboardCanvasShiftTimer =
               Timer.periodic(const Duration(milliseconds: 150), (_) {
             _updateKeyboardCanvasShift(keyboardShiftGeneration);
           });
-        } else {
+        } else if (_keyboardShiftSnapshotSaved) {
           _keyboardCanvasShift = _keyboardCanvasShiftSnapshot;
+          _keyboardShiftSnapshotSaved = false;
         }
       }
     }
