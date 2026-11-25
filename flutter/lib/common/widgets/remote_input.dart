@@ -62,59 +62,38 @@ bool isSpecialHoldDragActive = false;
 Offset _lastSpecialHoldDragFocalPoint = Offset.zero;
 
 class _NaturalScrollAccumulator {
-  static const double threshold = 10.0;
-  static const int intervalUs = 18000;
+  static const double _pixelsPerStep = 12.0;
 
-  double _integralX = 0;
-  double _integralY = 0;
-  int _lastScrollTsUs = 0;
+  double _accX = 0;
+  double _accY = 0;
 
   Future<void> add(
     Offset delta,
     InputModel inputModel, {
-    required Future<void> Function() onInterval,
+    required Future<void> Function() updateCursor,
   }) async {
     if (delta.dx.abs() > delta.dy.abs()) {
-      _integralX += delta.dx;
-      _integralY = 0;
+      _accX += delta.dx;
+      _accY = 0;
     } else {
-      _integralY += delta.dy;
-      _integralX = 0;
+      _accY += delta.dy;
+      _accX = 0;
     }
 
-    final nowUs = DateTime.now().microsecondsSinceEpoch;
-    final elapsedUs =
-        _lastScrollTsUs == 0 ? 1000000 : nowUs - _lastScrollTsUs;
-    if (elapsedUs < intervalUs) return;
-    _lastScrollTsUs = nowUs;
-    await onInterval();
+    await updateCursor();
+    final stepsY = (_accY / _pixelsPerStep).round();
+    final stepsX = (_accX / _pixelsPerStep).round();
+    _accY -= stepsY * _pixelsPerStep;
+    _accX -= stepsX * _pixelsPerStep;
 
-    if (_integralY.abs() >= threshold) {
-      final steps = min(4, (_integralY.abs() / threshold).floor());
-      if (steps <= 0) return;
-      final y = _integralY.sign.toInt();
-      if (!inputModel.isViewOnly) {
-        await inputModel.scroll(y * steps);
-      }
-      _integralY -= _integralY.sign * steps * threshold;
-      return;
-    }
-
-    if (_integralX.abs() >= threshold) {
-      final steps = min(4, (_integralX.abs() / threshold).floor());
-      if (steps <= 0) return;
-      final x = _integralX.sign.toInt();
-      if (!inputModel.isViewOnly) {
-        await inputModel.scroll(0, x: x * steps);
-      }
-      _integralX -= _integralX.sign * steps * threshold;
+    if ((stepsX != 0 || stepsY != 0) && !inputModel.isViewOnly) {
+      await inputModel.scroll(stepsY, x: stepsX);
     }
   }
 
   void reset() {
-    _integralX = 0;
-    _integralY = 0;
-    _lastScrollTsUs = 0;
+    _accX = 0;
+    _accY = 0;
   }
 }
 
@@ -190,7 +169,7 @@ class _PointerContact {
         case _PointerContactMode.longPressed:
           return;
         case _PointerContactMode.scrolling:
-          await scroll.add(delta, inputModel, onInterval: updateCursor);
+          await scroll.add(delta, inputModel, updateCursor: updateCursor);
           return;
         case _PointerContactMode.dragging:
           await updateDrag();
