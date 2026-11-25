@@ -21,6 +21,8 @@ const double _wheelWidth = 50;
 const double _wheelHeight = 162;
 // Used for the left/right button widgets
 const double _kSpaceToVerticalEdge = 15;
+const double _kPortraitButtonBottomSpace = 100;
+const double _kLandscapeButtonBottomSpace = 24;
 const double _kSpaceBetweenLeftRightButtons = 40;
 const double _kLeftRightButtonWidth = 55;
 const double _kLeftRightButtonHeight = 40;
@@ -138,10 +140,16 @@ class _FloatingWheelState extends State<FloatingWheel> {
 
   void _resetPosition() {
     final size = MediaQuery.of(context).size;
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
     setState(() {
       _position = Offset(
-        size.width - _wheelWidth - _kSpaceToHorizontalEdge,
-        (size.height - _wheelHeight) / 2,
+        isLandscape
+            ? _kSpaceToHorizontalEdge
+            : size.width - _wheelWidth - _kSpaceToHorizontalEdge,
+        isLandscape
+            ? _kSpaceToVerticalEdge
+            : (size.height - _wheelHeight) / 2,
       );
       _isInitialized = true;
     });
@@ -425,6 +433,10 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   }
 
   double _getOffsetX(double w) {
+    if (MediaQuery.of(context).orientation == Orientation.landscape) {
+      return _kSpaceToHorizontalEdge +
+          (_isLeft ? 0 : _kLeftRightButtonWidth + 8);
+    }
     if (_isLeft) {
       return (w - _kLeftRightButtonWidth * 2 - _kSpaceBetweenLeftRightButtons) *
           0.5;
@@ -467,13 +479,28 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
   void _restorePosition(Orientation ori) {
     final ps = bind.getLocalFlutterOption(k: _getPositionKey(ori));
     final pos = _loadPositionFromString(ps);
+    final size = MediaQuery.of(context).size;
+    final bottomSpace = ori == Orientation.landscape
+        ? _kLandscapeButtonBottomSpace
+        : _kPortraitButtonBottomSpace;
+    final defaultY = ori == Orientation.landscape
+        ? size.height * 0.62
+        : size.height - bottomSpace - _kLeftRightButtonHeight;
+    final maxY = max(
+      _kSpaceToVerticalEdge,
+      size.height - bottomSpace - _kLeftRightButtonHeight,
+    );
     if (pos == null) {
-      final size = MediaQuery.of(context).size;
-      _position = Offset(_getOffsetX(size.width),
-          size.height - _kSpaceToVerticalEdge - _kLeftRightButtonHeight);
+      _position = Offset(
+        _getOffsetX(size.width),
+        defaultY.clamp(_kSpaceToVerticalEdge, maxY).toDouble(),
+      );
     } else {
-      _position = pos;
-      _preSavedPos = pos;
+      _position = Offset(
+        ori == Orientation.landscape ? _getOffsetX(size.width) : pos.dx,
+        pos.dy.clamp(_kSpaceToVerticalEdge, maxY).toDouble(),
+      );
+      _preSavedPos = _position;
     }
   }
 
@@ -503,11 +530,23 @@ class _FloatingLeftRightButtonState extends State<FloatingLeftRightButton> {
     Offset newPosition = _position + delta;
     double minX = _kSpaceToHorizontalEdge;
     double minY = _kSpaceToVerticalEdge;
-    double maxX = size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge;
-    double maxY = size.height - _kLeftRightButtonHeight - _kSpaceToVerticalEdge;
+    final isLandscape = _previousOrientation == Orientation.landscape;
+    final maxX = isLandscape
+        ? min(
+            180.0,
+            size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge,
+          )
+        : size.width - _kLeftRightButtonWidth - _kSpaceToHorizontalEdge;
+    final bottomSpace = isLandscape
+        ? _kLandscapeButtonBottomSpace
+        : _kPortraitButtonBottomSpace;
+    final maxY = max(
+      _kSpaceToVerticalEdge,
+      size.height - _kLeftRightButtonHeight - bottomSpace,
+    );
     newPosition = Offset(
-      newPosition.dx.clamp(minX, maxX),
-      newPosition.dy.clamp(minY, maxY),
+      newPosition.dx.clamp(minX, maxX).toDouble(),
+      newPosition.dy.clamp(minY, maxY).toDouble(),
     );
     final isPositionChanged = !(isDoubleEqual(newPosition.dx, _position.dx) &&
         isDoubleEqual(newPosition.dy, _position.dy));
