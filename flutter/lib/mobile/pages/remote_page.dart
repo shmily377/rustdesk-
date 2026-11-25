@@ -667,7 +667,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                             child: Stack(
                                               children: [
                                                 Positioned.fill(
-                                                    child: mobileCanvas),
+                                                  child: IgnorePointer(
+                                                    ignoring: _showGestureHelp,
+                                                    child: mobileCanvas,
+                                                  ),
+                                                ),
                                                 if (_showGestureHelp)
                                                   Positioned(
                                                     top: 0,
