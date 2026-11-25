@@ -89,6 +89,7 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
+  Timer? _keyboardHideStyleTimer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   bool _autoOrientationDecided = false;
@@ -212,6 +213,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     inputModel.keyboardInputAllowed = true;
     await gFFI.close();
     _timer?.cancel();
+    _keyboardHideStyleTimer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
@@ -325,12 +327,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (!visible) {
       if (isAndroid) {
         unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: []).then((_) async {
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-          if (mounted) {
-            await gFFI.canvasModel.updateViewStyle();
+            overlays: []));
+        _keyboardHideStyleTimer?.cancel();
+        _keyboardHideStyleTimer = Timer(const Duration(milliseconds: 100), () {
+          if (mounted && !keyboardVisibilityController.isVisible) {
+            unawaited(gFFI.canvasModel.updateViewStyle());
           }
-        }));
+        });
       } else {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       }
@@ -355,6 +358,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         });
       }
     } else {
+      _keyboardHideStyleTimer?.cancel();
+      _keyboardHideStyleTimer = null;
       _iosKeyboardWorkaroundTimer?.cancel();
       _iosKeyboardWorkaroundTimer = null;
       _timer?.cancel();

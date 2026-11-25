@@ -2274,6 +2274,7 @@ class CanvasModel with ChangeNotifier {
   Offset? _offsetBeforeMobileSoftKeyboard;
   double? _scaleBeforeMobileSoftKeyboard;
   bool _hasOffsetBeforeMobileSoftKeyboard = false;
+  int _mobileKeyboardOffsetGeneration = 0;
 
   // `isMobileCanvasChanged` is used to avoid canvas reset when changing the input method
   // after showing the soft keyboard.
@@ -2844,6 +2845,7 @@ class CanvasModel with ChangeNotifier {
     _lastViewStyle = ViewStyle.defaultViewStyle();
     _timerMobileFocusCanvasCursor?.cancel();
     _timerMobileRestoreCanvasOffset?.cancel();
+    _mobileKeyboardOffsetGeneration++;
     _offsetBeforeMobileSoftKeyboard = null;
     _scaleBeforeMobileSoftKeyboard = null;
     _hasOffsetBeforeMobileSoftKeyboard = false;
@@ -2876,6 +2878,7 @@ class CanvasModel with ChangeNotifier {
   }
 
   void saveMobileOffsetBeforeSoftKeyboard() {
+    _mobileKeyboardOffsetGeneration++;
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = Offset(_x, _y);
     _scaleBeforeMobileSoftKeyboard = _scale;
@@ -2883,6 +2886,7 @@ class CanvasModel with ChangeNotifier {
   }
 
   void restoreMobileOffsetAfterSoftKeyboard() {
+    final generation = ++_mobileKeyboardOffsetGeneration;
     _timerMobileRestoreCanvasOffset?.cancel();
     _timerMobileFocusCanvasCursor?.cancel();
     final targetOffset = _offsetBeforeMobileSoftKeyboard;
@@ -2901,6 +2905,9 @@ class CanvasModel with ChangeNotifier {
       return;
     }
     _timerMobileRestoreCanvasOffset = Timer(Duration(milliseconds: 100), () {
+      if (generation != _mobileKeyboardOffsetGeneration) {
+        return;
+      }
       updateSize();
       _x = targetOffset.dx;
       _y = targetOffset.dy;
