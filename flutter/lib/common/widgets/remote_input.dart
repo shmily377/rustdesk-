@@ -128,6 +128,10 @@ class _PointerContact {
   double maxMovement = 0;
   bool dragPrepared = false;
   bool dragButtonDownSent = false;
+  bool _usesTouchPan = false;
+  bool _touchPanStarted = false;
+  Offset _lastPanPosition = Offset.zero;
+  InputModel? _panInputModel;
   Future<void> _updateQueue = Future<void>.value();
   bool _ending = false;
 
@@ -136,8 +140,11 @@ class _PointerContact {
   void update({
     required Offset position,
     required Offset delta,
+    required Offset panPosition,
     required InputModel inputModel,
     required Future<void> Function() updateCursor,
+    required void Function(Offset position) startPan,
+    required void Function(Offset delta) updatePan,
     required Future<void> Function() startDrag,
     required Future<void> Function() updateDrag,
   }) {
@@ -154,9 +161,16 @@ class _PointerContact {
         mode = _PointerContactMode.scrolling;
         _dragReadyTimer.cancel();
         _longPressTimer?.cancel();
+        _usesTouchPan = inputModel.peerPlatform == kPeerPlatformAndroid;
+        if (_usesTouchPan) {
+          _panInputModel = inputModel;
+        }
       }
     }
 
+    if (mode == _PointerContactMode.scrolling && _usesTouchPan) {
+      _lastPanPosition = panPosition;
+    }
     final modeAtEvent = mode;
     _updateQueue = _updateQueue.then((_) async {
       if (startedDrag) {
@@ -169,7 +183,19 @@ class _PointerContact {
         case _PointerContactMode.longPressed:
           return;
         case _PointerContactMode.scrolling:
-          await scroll.add(delta, inputModel, updateCursor: updateCursor);
+          if (_usesTouchPan) {
+            if (!_touchPanStarted) {
+              if (!inputModel.isViewOnly) {
+                startPan(panPosition);
+              }
+              _touchPanStarted = true;
+            }
+            if (!inputModel.isViewOnly) {
+              updatePan(delta);
+            }
+          } else {
+            await scroll.add(delta, inputModel, updateCursor: updateCursor);
+          }
           return;
         case _PointerContactMode.dragging:
           await updateDrag();
@@ -178,17 +204,30 @@ class _PointerContact {
     });
   }
 
-  Future<void> finish({required Future<void> Function() releaseDrag}) async {
+  Future<void> finish({
+    required Future<void> Function() releaseDrag,
+    Offset? panEndPosition,
+  }) async {
     if (_ending) return;
     _ending = true;
     _dragReadyTimer.cancel();
     _longPressTimer?.cancel();
+    if (panEndPosition != null && _usesTouchPan) {
+      _lastPanPosition = panEndPosition;
+    }
     try {
       await _updateQueue;
     } finally {
       if (dragButtonDownSent) {
         await releaseDrag();
         dragButtonDownSent = false;
+      }
+      if (_touchPanStarted && !(_panInputModel?.isViewOnly ?? true)) {
+        _panInputModel?.handlePointerEvent(
+            'touch', kMouseEventTypePanEnd, _lastPanPosition);
+      }
+      if (_touchPanStarted) {
+        _touchPanStarted = false;
       }
       scroll.reset();
     }
@@ -361,6 +400,7 @@ class _RawTouchGestureDetectorRegionState
         contact.update(
           position: event.localPosition,
           delta: event.delta,
+          panPosition: event.localPosition,
           inputModel: pointerInputModel,
           updateCursor: () async {
             pointerInputModel.handleMouse(
@@ -368,6 +408,13 @@ class _RawTouchGestureDetectorRegionState
               event.localPosition,
             );
           },
+          startPan: (position) => pointerInputModel.handlePointerEvent(
+              'touch', kMouseEventTypePanStart, position),
+          updatePan: (delta) => pointerInputModel.handlePointerEvent(
+            'touch',
+            kMouseEventTypePanUpdate,
+            Offset(delta.dx.roundToDouble(), delta.dy.roundToDouble()),
+          ),
           startDrag: () async {
             await pointerInputModel.sendMouse('down', MouseButtons.left);
           },
@@ -402,7 +449,8 @@ class _RawTouchGestureDetectorRegionState
       unawaited(contact
           .finish(
               releaseDrag: () =>
-                  inputModel.sendMouse('up', MouseButtons.left))
+                  inputModel.sendMouse('up', MouseButtons.left),
+              panEndPosition: event.localPosition)
           .whenComplete(contact.dispose));
     }
     if (event.kind != PointerDeviceKind.touch ||
@@ -443,7 +491,8 @@ class _RawTouchGestureDetectorRegionState
       unawaited(contact
           .finish(
               releaseDrag: () =>
-                  inputModel.sendMouse('up', MouseButtons.left))
+                  inputModel.sendMouse('up', MouseButtons.left),
+              panEndPosition: event.localPosition)
           .whenComplete(contact.dispose));
       _androidSingleFingerScrollHandled = true;
     }
@@ -463,8 +512,8 @@ class _RawTouchGestureDetectorRegionState
     for (final contact in _touchContacts.values) {
       unawaited(contact
           .finish(
-              releaseDrag: () => pointerInputModel.sendMouse(
-                  'up', MouseButtons.left))
+              releaseDrag: () =>
+                  pointerInputModel.sendMouse('up', MouseButtons.left))
           .whenComplete(contact.dispose));
     }
     _touchContacts.clear();
@@ -1155,7 +1204,9 @@ class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
             unawaited(contact
                 .finish(
                     releaseDrag: () => pointerInputModel
-                        .sendMouse('up', MouseButtons.left))
+                        .sendMouse('up', MouseButtons.left),
+                    panEndPosition:
+                        pointerInputModel.remoteCanvasPositionForPointer(evt))
                 .then<void>((_) async {
                   if (contact.mode == _PointerContactMode.pending &&
                       !pointerInputModel.isViewOnly) {
@@ -1178,7 +1229,9 @@ class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
             unawaited(contact
                 .finish(
                     releaseDrag: () => pointerInputModel
-                        .sendMouse('up', MouseButtons.left))
+                        .sendMouse('up', MouseButtons.left),
+                    panEndPosition:
+                        pointerInputModel.remoteCanvasPositionForPointer(evt))
                 .whenComplete(contact.dispose));
           }
         } else if (evt.kind == PointerDeviceKind.touch) {
@@ -1193,6 +1246,8 @@ class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
             contact.update(
               position: evt.localPosition,
               delta: evt.delta,
+              panPosition:
+                  pointerInputModel.remoteCanvasPositionForPointer(evt),
               inputModel: pointerInputModel,
               updateCursor: () async {
                 pointerInputModel.handleMouse(
@@ -1200,6 +1255,13 @@ class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
                   pointerInputModel.remoteCanvasPositionForPointer(evt),
                 );
               },
+              startPan: (position) => pointerInputModel.handlePointerEvent(
+                  'touch', kMouseEventTypePanStart, position),
+              updatePan: (delta) => pointerInputModel.handlePointerEvent(
+                'touch',
+                kMouseEventTypePanUpdate,
+                Offset(delta.dx.roundToDouble(), delta.dy.roundToDouble()),
+              ),
               startDrag: () async {
                 await pointerInputModel.sendMouse('down', MouseButtons.left);
               },
