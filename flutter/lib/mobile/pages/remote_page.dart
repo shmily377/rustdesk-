@@ -94,6 +94,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _displayRotationQueryTimer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
+  bool _toolbarOverlayOpen = false;
   bool _autoOrientationDecided = false;
   bool _landscapeToolbarOnLeft = false;
   bool _keyboardCanvasShiftKeyboardVisible = false;
@@ -105,6 +106,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
+  Timer? _toolbarIdleTimer;
 
   final _blockableOverlayState = BlockableOverlayState();
 
@@ -224,6 +226,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _timer?.cancel();
     _keyboardHideStyleTimer?.cancel();
     _keyboardCanvasShiftTimer?.cancel();
+    _toolbarIdleTimer?.cancel();
     _keyboardCanvasShiftGeneration++;
     _displayRotationQueryTimer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
@@ -655,6 +658,58 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         : 'side';
   }
 
+  void _markCanvasActivity() {
+    if (!isAndroid) return;
+    _toolbarIdleTimer?.cancel();
+    _toolbarIdleTimer = Timer(const Duration(seconds: 2), () {
+      final keyboardIsVisible =
+          keyboardVisibilityController.isVisible && _showEdit;
+      if (mounted &&
+          _showBar &&
+          !keyboardIsVisible &&
+          !_showGestureHelp &&
+          !_toolbarOverlayOpen &&
+          ModalRoute.of(context)?.isCurrent != false &&
+          gFFI.chatModel.chatWindowOverlayEntry == null) {
+        setState(() => _showBar = false);
+      }
+    });
+  }
+
+  void _onCanvasPointerDown(PointerDownEvent event,
+      {double? gestureHelpPanelStartX}) {
+    if (!isAndroid ||
+        (gestureHelpPanelStartX != null &&
+            event.localPosition.dx >= gestureHelpPanelStartX)) {
+      return;
+    }
+    _markCanvasActivity();
+    if (_showGestureHelp) {
+      setState(() => _showGestureHelp = false);
+    }
+  }
+
+  void _onCanvasPointerMove(PointerMoveEvent event,
+      {double? gestureHelpPanelStartX}) {
+    if (!isAndroid ||
+        (gestureHelpPanelStartX != null &&
+            event.localPosition.dx >= gestureHelpPanelStartX)) {
+      return;
+    }
+    _markCanvasActivity();
+  }
+
+  Future<void> _trackToolbarOverlay(Future<void> Function() action) async {
+    _toolbarIdleTimer?.cancel();
+    _toolbarIdleTimer = null;
+    _toolbarOverlayOpen = true;
+    try {
+      await action();
+    } finally {
+      _toolbarOverlayOpen = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final keyboardIsVisible =
@@ -761,17 +816,27 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                               ? 420.0
                                               : constraints.maxWidth * 0.8;
                                       return Listener(
-                                        onPointerDown: _showGestureHelp
-                                            ? (event) {
-                                                if (event.localPosition.dx <
-                                                    constraints.maxWidth -
-                                                        panelWidth -
-                                                        8) {
-                                                  setState(() =>
-                                                      _showGestureHelp = false);
-                                                }
-                                              }
-                                            : null,
+                                        behavior: HitTestBehavior.translucent,
+                                        onPointerDown: (event) =>
+                                            _onCanvasPointerDown(
+                                          event,
+                                          gestureHelpPanelStartX:
+                                              _showGestureHelp
+                                                  ? constraints.maxWidth -
+                                                      panelWidth -
+                                                      8
+                                                  : null,
+                                        ),
+                                        onPointerMove: (event) =>
+                                            _onCanvasPointerMove(
+                                          event,
+                                          gestureHelpPanelStartX:
+                                              _showGestureHelp
+                                                  ? constraints.maxWidth -
+                                                      panelWidth -
+                                                      8
+                                                  : null,
+                                        ),
                                         child: Stack(
                                           children: [
                                             Positioned.fill(
@@ -808,7 +873,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                       : [canvas, toolbar],
                                 );
                               }
-                              return mobileCanvas;
+                              return isAndroid
+                                  ? Listener(
+                                      behavior: HitTestBehavior.translucent,
+                                      onPointerDown: _onCanvasPointerDown,
+                                      onPointerMove: _onCanvasPointerMove,
+                                      child: mobileCanvas,
+                                    )
+                                  : mobileCanvas;
                             });
                             return isAndroid
                                 ? mobilePage
@@ -893,7 +965,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       button(Icons.clear, () => clientClose(sessionId, gFFI)),
       button(Icons.tv, () {
         setState(() => _showEdit = false);
-        showOptions(context, widget.id, gFFI.dialogManager);
+        unawaited(_trackToolbarOverlay(
+            () => showOptions(context, widget.id, gFFI.dialogManager)));
       }),
     ];
     if (isAndroid) {
@@ -933,14 +1006,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                 : const Icon(Icons.message),
           ),
           onPressed: () => isAndroid && isSupportVoiceCall
-              ? showChatOptions(widget.id)
+              ? unawaited(
+                  _trackToolbarOverlay(() => showChatOptions(widget.id)))
               : onPressedTextChat(widget.id),
         ),
       ));
     }
     buttons.add(button(Icons.more_vert, () {
       setState(() => _showEdit = false);
-      showActions(widget.id);
+      unawaited(_trackToolbarOverlay(() => showActions(widget.id)));
     }));
     buttons.add(Obx(() => button(
           Icons.expand_more,
@@ -1111,7 +1185,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     ];
   }
 
-  void showActions(String id) async {
+  Future<void> showActions(String id) async {
     final size = MediaQuery.of(context).size;
     final x = 120.0;
     final y = size.height;
@@ -1134,21 +1208,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               value: e.key + mobileActionMenus.length))
           .toList(),
     ];
-    () async {
-      var index = await showMenu(
-        context: context,
-        position: RelativeRect.fromLTRB(x, y, x, y),
-        items: more,
-        elevation: 8,
-      );
-      if (index != null) {
-        if (index < mobileActionMenus.length) {
-          mobileActionMenus[index].onPressed?.call();
-        } else if (index < mobileActionMenus.length + more.length) {
-          menus[index - mobileActionMenus.length].onPressed?.call();
-        }
+    final index = await showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(x, y, x, y),
+      items: more,
+      elevation: 8,
+    );
+    if (index != null) {
+      if (index < mobileActionMenus.length) {
+        mobileActionMenus[index].onPressed?.call();
+      } else if (index < mobileActionMenus.length + more.length) {
+        menus[index - mobileActionMenus.length].onPressed?.call();
       }
-    }();
+    }
   }
 
   void _registerMobileChatShortcut() {
@@ -1165,7 +1237,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     gFFI.chatModel.toggleChatOverlay(requestSoftKeyboard: requestSoftKeyboard);
   }
 
-  showChatOptions(String id) async {
+  Future<void> showChatOptions(String id) async {
     onPressVoiceCall() => bind.sessionRequestVoiceCall(sessionId: sessionId);
     onPressEndVoiceCall() => bind.sessionCloseVoiceCall(sessionId: sessionId);
 
@@ -1216,20 +1288,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         .entries
         .map((e) => PopupMenuItem<int>(child: e.value.getChild(), value: e.key))
         .toList();
-    Future.delayed(Duration.zero, () async {
-      final size = MediaQuery.of(context).size;
-      final x = 120.0;
-      final y = size.height;
-      var index = await showMenu(
-        context: context,
-        position: RelativeRect.fromLTRB(x, y, x, y),
-        items: menuItems,
-        elevation: 8,
-      );
-      if (index != null && index < menus.length) {
-        menus[index].onPressed?.call();
-      }
-    });
+    await Future<void>.delayed(Duration.zero);
+    final size = MediaQuery.of(context).size;
+    final x = 120.0;
+    final y = size.height;
+    final index = await showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(x, y, x, y),
+      items: menuItems,
+      elevation: 8,
+    );
+    if (index != null && index < menus.length) {
+      menus[index].onPressed?.call();
+    }
   }
 
   /// aka changeTouchMode
@@ -1592,7 +1663,7 @@ class CursorPaint extends StatelessWidget {
   }
 }
 
-void showOptions(
+Future<void> showOptions(
     BuildContext context, String id, OverlayDialogManager dialogManager) async {
   var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
@@ -1674,7 +1745,7 @@ void showOptions(
     }
   }
 
-  dialogManager.show((setState, close, context) {
+  await dialogManager.show((setState, close, context) {
     var viewStyle =
         (viewStyleRadios.isNotEmpty ? viewStyleRadios[0].groupValue : '').obs;
     var imageQuality =
