@@ -1583,7 +1583,7 @@ fn handle_native_touch(frame: &NativeTouchFrame) {
                 pointerInfo: windows::Win32::UI::Input::Pointer::POINTER_INFO {
                     pointerType: PT_TOUCH,
                     pointerId: id as u32,
-                    pointerFlags,
+                    pointerFlags: pointer_flags,
                     ptPixelLocation: windows::Win32::Foundation::POINT {
                         x: point.x,
                         y: point.y,
