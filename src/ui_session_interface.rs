@@ -1221,6 +1221,36 @@ impl<T: InvokeUiSession> Session<T> {
         send_pointer_device_event(evt, alt, ctrl, shift, command, self);
     }
 
+    pub fn send_native_touch_frame(
+        &self,
+        points: &[(i32, i32, i32, i32, i32)],
+        width: i32,
+        height: i32,
+        alt: bool,
+        ctrl: bool,
+        shift: bool,
+        command: bool,
+    ) {
+        let mut frame = NativeTouchFrame::new();
+        frame.width = width.max(1);
+        frame.height = height.max(1);
+        for &(id, x, y, action, pressure) in points {
+            frame.points.push(NativeTouchPoint {
+                id,
+                x,
+                y,
+                action,
+                pressure,
+                ..Default::default()
+            });
+        }
+        let mut touch_evt = TouchEvent::new();
+        touch_evt.set_native_frame(frame);
+        let mut evt = PointerDeviceEvent::new();
+        evt.set_touch_event(touch_evt);
+        send_pointer_device_event(evt, alt, ctrl, shift, command, self);
+    }
+
     #[inline]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn is_scroll_reverse_mode(&self) -> bool {

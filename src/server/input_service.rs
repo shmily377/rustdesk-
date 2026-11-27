@@ -5,7 +5,8 @@ use crate::input::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::whiteboard;
 use base::message_proto::{
-    pointer_device_event::Union::TouchEvent, touch_event::Union::ScaleUpdate,
+    pointer_device_event::Union::TouchEvent,
+    touch_event::Union::{NativeFrame, ScaleUpdate},
 };
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
@@ -1245,6 +1246,10 @@ pub fn handle_pointer_(evt: &PointerDeviceEvent, conn: i32) {
                 #[cfg(target_os = "windows")]
                 handle_scale(_scale_evt.scale);
             }
+            #[cfg(target_os = "windows")]
+            Some(NativeFrame(frame)) => handle_native_touch(frame),
+            #[cfg(not(target_os = "windows"))]
+            Some(NativeFrame(_frame)) => {}
             _ => {}
         },
         _ => {}
@@ -1524,6 +1529,111 @@ fn handle_scale(scale: i32) {
         if en.key_down(Key::Control).is_ok() {
             en.mouse_scroll_y(scale);
         }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn handle_native_touch(frame: &NativeTouchFrame) {
+    use std::sync::OnceLock;
+    use windows::Win32::UI::{
+        Input::Pointer::{
+            self, InjectTouchInput, InitializeTouchInjection, POINTER_FLAG_CANCELED,
+            POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_PRIMARY,
+            POINTER_FLAG_NONE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_TOUCH_INFO,
+        },
+        WindowsAndMessaging::{PT_TOUCH, TOUCH_FLAG_NONE, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE},
+    };
+
+    const MAX_TOUCH_CONTACTS: u32 = 256;
+    let contacts: Vec<POINTER_TOUCH_INFO> = frame
+        .points
+        .iter()
+        .filter_map(|point| {
+            let id = point.id;
+            if id < 0 {
+                return None;
+            }
+            let pointer_flags = match point.action {
+                0 => {
+                    POINTER_FLAG_DOWN
+                        | POINTER_FLAG_INCONTACT
+                        | POINTER_FLAG_INRANGE
+                        | if id == 0 {
+                            POINTER_FLAG_PRIMARY
+                        } else {
+                            POINTER_FLAG_NONE
+                        }
+                }
+                1 => {
+                    POINTER_FLAG_UPDATE
+                        | POINTER_FLAG_INCONTACT
+                        | POINTER_FLAG_INRANGE
+                        | if id == 0 {
+                            POINTER_FLAG_PRIMARY
+                        } else {
+                            POINTER_FLAG_NONE
+                        }
+                }
+                2 => POINTER_FLAG_UP,
+                3 => POINTER_FLAG_UPDATE | POINTER_FLAG_CANCELED,
+                _ => return None,
+            };
+
+            let contact = POINTER_TOUCH_INFO {
+                pointerInfo: windows::Win32::UI::Input::Pointer::POINTER_INFO {
+                    pointerType: PT_TOUCH,
+                    pointerId: id as u32,
+                    pointerFlags,
+                    ptPixelLocation: windows::Win32::Foundation::POINT {
+                        x: point.x,
+                        y: point.y,
+                    },
+                    ..Default::default()
+                },
+                touchFlags: TOUCH_FLAG_NONE,
+                touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+                rcContact: windows::Win32::Foundation::RECT {
+                    left: point.x - 8,
+                    top: point.y - 8,
+                    right: point.x + 8,
+                    bottom: point.y + 8,
+                },
+                rcContactRaw: windows::Win32::Foundation::RECT {
+                    left: point.x - 8,
+                    top: point.y - 8,
+                    right: point.x + 8,
+                    bottom: point.y + 8,
+                },
+                orientation: 0,
+                pressure: if point.pressure <= 0 {
+                    512
+                } else {
+                    point.pressure.clamp(0, 1024) as u32
+                },
+            };
+            Some(contact)
+        })
+        .collect();
+
+    if contacts.is_empty() {
+        return;
+    }
+
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    if INITIALIZED.get().is_none() {
+        match unsafe { InitializeTouchInjection(MAX_TOUCH_CONTACTS, Pointer::TOUCH_FEEDBACK_NONE) } {
+            Ok(()) => {
+                let _ = INITIALIZED.set(());
+            }
+            Err(err) => {
+                log::warn!("InitializeTouchInjection failed: {err}");
+                return;
+            }
+        }
+    }
+
+    if let Err(err) = unsafe { InjectTouchInput(&contacts) } {
+        log::warn!("InjectTouchInput failed: {err}");
     }
 }
 

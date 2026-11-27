@@ -1932,6 +1932,40 @@ fn session_send_touch_pan(
     }
 }
 
+#[inline]
+fn session_send_native_touch(
+    session_id: SessionID,
+    v: &serde_json::Value,
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+    command: bool,
+) {
+    let width = v.get("width").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
+    let height = v.get("height").and_then(|x| x.as_i64()).unwrap_or(1) as i32;
+    let Some(points) = v.get("points").and_then(|x| x.as_array()) else {
+        return;
+    };
+    let parsed: Vec<_> = points
+        .iter()
+        .filter_map(|point| {
+            Some((
+                point.get("id")?.as_i64()? as i32,
+                point.get("x")?.as_i64()? as i32,
+                point.get("y")?.as_i64()? as i32,
+                point.get("action")?.as_i64()? as i32,
+                point.get("pressure").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+            ))
+        })
+        .collect();
+    if parsed.is_empty() {
+        return;
+    }
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.send_native_touch_frame(&parsed, width, height, alt, ctrl, shift, command);
+    }
+}
+
 fn session_send_touch_event(
     session_id: SessionID,
     v: &serde_json::Value,
@@ -1942,6 +1976,7 @@ fn session_send_touch_event(
 ) {
     match v.get("t").and_then(|t| t.as_str()) {
         Some("scale") => session_send_touch_scale(session_id, v, alt, ctrl, shift, command),
+        Some("native") => session_send_native_touch(session_id, v, alt, ctrl, shift, command),
         Some(pan_event) => {
             session_send_touch_pan(session_id, v, pan_event, alt, ctrl, shift, command)
         }

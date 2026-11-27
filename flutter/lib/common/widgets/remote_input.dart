@@ -293,6 +293,7 @@ class _RawTouchGestureDetectorRegionState
   double _twoFingerScrollIntegralY = 0;
   int _lastTwoFingerScrollTsUs = 0;
   final Map<int, Offset> _activeTouchPositions = {};
+  final Map<int, Offset> _activeTouchRemotePositions = {};
   Map<int, Offset>? _twoFingerTapStartPositions;
   int _twoFingerTapStartTsUs = 0;
   double _twoFingerTapMaxMovement = 0;
@@ -343,7 +344,7 @@ class _RawTouchGestureDetectorRegionState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.ffi.sessionId != widget.ffi.sessionId) {
       _cancelTouchContacts(inputModel: oldWidget.ffi.inputModel);
-      _activeTouchPositions.clear();
+      _resetNativeTouchState();
       _resetTwoFingerTapState();
       _resetTwoFingerScrollState();
     }
@@ -355,8 +356,84 @@ class _RawTouchGestureDetectorRegionState
   bool get _isAndroidTouchMode =>
       _isAndroidMobileClient && ffiModel.touchMode;
 
+  bool get _useNativeTouch =>
+      _isAndroidTouchMode && inputModel.peerPlatform != kPeerPlatformAndroid;
+
+  Map<String, dynamic> _buildNativeTouchFrame(PointerEvent event) {
+    if (_activeTouchPositions.containsKey(event.pointer)) {
+      _activeTouchPositions[event.pointer] = event.localPosition;
+    }
+    final pos = inputModel.remoteCanvasPositionForPointer(event);
+    _activeTouchRemotePositions[event.pointer] = pos;
+    final rect = ffiModel.rect;
+    final width = max(1, rect?.width.round() ?? 1);
+    final height = max(1, rect?.height.round() ?? 1);
+    final points = <Map<String, dynamic>>[];
+    int action;
+    if (event is PointerDownEvent) {
+      action = 0;
+    } else if (event is PointerUpEvent) {
+      action = 2;
+    } else if (event is PointerCancelEvent) {
+      action = 3;
+    } else {
+      action = 1;
+    }
+    for (final entry in _activeTouchPositions.entries) {
+      final remotePosition = _activeTouchRemotePositions[entry.key];
+      if (remotePosition == null) {
+        continue;
+      }
+      points.add({
+        'id': entry.key,
+        'x': remotePosition.dx.round().clamp(0, width),
+        'y': remotePosition.dy.round().clamp(0, height),
+        'action': entry.key == event.pointer ? action : 1,
+        'pressure': event.kind == PointerDeviceKind.stylus ? 512 : 0,
+      });
+    }
+    if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _activeTouchPositions.remove(event.pointer);
+      _activeTouchRemotePositions.remove(event.pointer);
+    }
+    return {
+      'width': width,
+      'height': height,
+      'points': points,
+    };
+  }
+
+  void _sendNativeTouchFrame(PointerEvent event) {
+    if (!_useNativeTouch || inputModel.isViewOnly) {
+      return;
+    }
+    final frame = _buildNativeTouchFrame(event);
+    final points = frame['points'] as List?;
+    if (points == null || points.isEmpty) {
+      return;
+    }
+    final evt = PointerEventToRust(
+      kPointerEventKindTouch,
+      'native',
+      frame,
+    ).toJson();
+    bind.sessionSendPointer(
+      sessionId: sessionId,
+      msg: json.encode(inputModel.modify(evt)),
+    );
+  }
+
+  void _resetNativeTouchState() {
+    _activeTouchPositions.clear();
+    _activeTouchRemotePositions.clear();
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     if (event.kind == PointerDeviceKind.touch) {
+      if (_useNativeTouch) {
+        _sendNativeTouchFrame(event);
+        return;
+      }
       _activeTouchPositions[event.pointer] = event.localPosition;
       if (_isAndroidTouchMode && _activeTouchPositions.length == 1) {
         _androidSingleFingerScrollHandled = false;
@@ -465,6 +542,10 @@ class _RawTouchGestureDetectorRegionState
     if (event.kind == PointerDeviceKind.touch &&
         _activeTouchPositions.containsKey(event.pointer)) {
       _activeTouchPositions[event.pointer] = event.localPosition;
+      if (_useNativeTouch) {
+        _sendNativeTouchFrame(event);
+        return;
+      }
       if (_isAndroidTouchMode && _activeTouchPositions.length == 2) {
         unawaited(_handleAndroidTwoFingerMove());
       }
@@ -545,6 +626,10 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     _activeTouchPositions[event.pointer] = event.localPosition;
+    if (_useNativeTouch) {
+      _sendNativeTouchFrame(event);
+      return;
+    }
     final startPositions = _twoFingerTapStartPositions;
     if (_isTwoFingerTapCandidate && startPositions != null) {
       final startPosition = startPositions[event.pointer];
@@ -582,6 +667,11 @@ class _RawTouchGestureDetectorRegionState
               panEndPosition: event.localPosition)
           .whenComplete(contact.dispose));
       _androidSingleFingerScrollHandled = true;
+    }
+    _activeTouchPositions[event.pointer] = event.localPosition;
+    if (_useNativeTouch) {
+      _sendNativeTouchFrame(event);
+      return;
     }
     _activeTouchPositions.remove(event.pointer);
     if (_activeTouchPositions.isEmpty) {
