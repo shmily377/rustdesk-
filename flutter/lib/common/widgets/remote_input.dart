@@ -967,6 +967,7 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (isAndroid && !isDesktop && !isWebDesktop) {
+      _scale = 1;
       _lastTwoFingerFocalPoint = d.focalPoint;
       _lastTwoFingerScrollTsUs = 0;
 
@@ -997,11 +998,17 @@ class _RawTouchGestureDetectorRegionState
     // pinch zoom as a separate gesture; a pure two-finger translation keeps
     // d.scale near 1 and therefore does not alter the canvas scale.
     if (isAndroid && !isDesktop && !isWebDesktop) {
-      if (canvasLocked) return;
-      final scaleDelta = d.scale / _scale;
-      if ((scaleDelta - 1).abs() > 0.001) {
-        ffi.canvasModel.updateScale(scaleDelta, d.focalPoint);
-        _scale = d.scale;
+      // Forward pinch changes to the remote host.  The desktop input service
+      // converts ScaleUpdate into Ctrl+wheel, matching a touchpad zoom
+      // gesture.  Do not scale the RustDesk canvas locally.
+      final scale = ((d.scale - _scale) * 1000).toInt();
+      _scale = d.scale;
+      if (scale != 0 && !widget.isCamera) {
+        await bind.sessionSendPointer(
+            sessionId: sessionId,
+            msg: json.encode(
+                PointerEventToRust(kPointerEventKindTouch, 'scale', scale)
+                    .toJson()));
       }
       return;
     }
@@ -1047,6 +1054,14 @@ class _RawTouchGestureDetectorRegionState
 
   onTwoFingerScaleCancel(ScaleEndDetails d) async {
     if (isAndroid && !isDesktop && !isWebDesktop) {
+      if (!widget.isCamera) {
+        await bind.sessionSendPointer(
+            sessionId: sessionId,
+            msg: json.encode(
+                PointerEventToRust(kPointerEventKindTouch, 'scale', 0)
+                    .toJson()));
+      }
+      _scale = 1;
       _resetTwoFingerScrollState();
       return;
     }
@@ -1060,6 +1075,14 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (isAndroid && !isDesktop && !isWebDesktop) {
+      if (!widget.isCamera) {
+        await bind.sessionSendPointer(
+            sessionId: sessionId,
+            msg: json.encode(
+                PointerEventToRust(kPointerEventKindTouch, 'scale', 0)
+                    .toJson()));
+      }
+      _scale = 1;
       _resetTwoFingerScrollState();
       return;
     }
