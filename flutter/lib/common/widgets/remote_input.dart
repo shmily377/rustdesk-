@@ -993,64 +993,15 @@ class _RawTouchGestureDetectorRegionState
     }
     if (inputModel.isViewOnly) return;
 
-    // Android: use the focal point (two-finger center) for wheel scrolling.
-    // Pinch scale and canvas pan are intentionally ignored.
+    // Raw pointer frames handle Android two-finger wheel scrolling. Keep
+    // pinch zoom as a separate gesture; a pure two-finger translation keeps
+    // d.scale near 1 and therefore does not alter the canvas scale.
     if (isAndroid && !isDesktop && !isWebDesktop) {
-      // RawPointerMouseRegion now handles Android two-finger frames directly.
-      // Returning here prevents ScaleGestureRecognizer from duplicating them.
-      return;
-      final delta = d.focalPoint - _lastTwoFingerFocalPoint;
-      _lastTwoFingerFocalPoint = d.focalPoint;
-
-      // Dominant-axis filtering avoids simultaneous horizontal and vertical
-      // wheel events while the two-finger center moves diagonally.
-      if (delta.dx.abs() > delta.dy.abs()) {
-        _twoFingerScrollIntegralX += delta.dx;
-        _twoFingerScrollIntegralY = 0;
-      } else {
-        _twoFingerScrollIntegralY += delta.dy;
-        _twoFingerScrollIntegralX = 0;
-      }
-
-      final nowUs = DateTime.now().microsecondsSinceEpoch;
-      final elapsedUs = _lastTwoFingerScrollTsUs == 0
-          ? 1000000
-          : nowUs - _lastTwoFingerScrollTsUs;
-      if (elapsedUs < _twoFingerScrollIntervalUs) return;
-
-      if (_twoFingerScrollIntegralY.abs() >= _twoFingerScrollThreshold) {
-        final steps = min(
-            4,
-            (_twoFingerScrollIntegralY.abs() / _twoFingerScrollThreshold)
-                .floor());
-        if (steps <= 0) return;
-        // Natural direction: fingers down => content down; fingers up => content up.
-        final y = _twoFingerScrollIntegralY.sign.toInt();
-        _twoFingerTapScrollSent = true;
-        await inputModel.scroll(y * steps);
-        _twoFingerScrollIntegralY -=
-            _twoFingerScrollIntegralY.sign *
-                steps *
-                _twoFingerScrollThreshold;
-        _lastTwoFingerScrollTsUs = nowUs;
-        return;
-      }
-
-      if (_twoFingerScrollIntegralX.abs() >= _twoFingerScrollThreshold) {
-        final steps = min(
-            4,
-            (_twoFingerScrollIntegralX.abs() / _twoFingerScrollThreshold)
-                .floor());
-        if (steps <= 0) return;
-        // Natural direction: fingers right => content right; fingers left => content left.
-        final x = _twoFingerScrollIntegralX.sign.toInt();
-        _twoFingerTapScrollSent = true;
-        await inputModel.scroll(0, x: x * steps);
-        _twoFingerScrollIntegralX =
-            _twoFingerScrollIntegralX.sign *
-                (_twoFingerScrollIntegralX.abs() -
-                    steps * _twoFingerScrollThreshold);
-        _lastTwoFingerScrollTsUs = nowUs;
+      if (canvasLocked) return;
+      final scaleDelta = d.scale / _scale;
+      if ((scaleDelta - 1).abs() > 0.001) {
+        ffi.canvasModel.updateScale(scaleDelta, d.focalPoint);
+        _scale = d.scale;
       }
       return;
     }
