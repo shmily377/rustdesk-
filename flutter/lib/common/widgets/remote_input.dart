@@ -145,6 +145,7 @@ class _PointerContact {
     required Future<void> Function() updateCursor,
     required void Function(Offset position) startPan,
     required void Function(Offset delta) updatePan,
+    required Future<void> Function() movePointer,
     required Future<void> Function() startDrag,
     required Future<void> Function() updateDrag,
   }) {
@@ -194,7 +195,10 @@ class _PointerContact {
               updatePan(delta);
             }
           } else {
-            await scroll.add(delta, inputModel, updateCursor: updateCursor);
+            // Moonlight's relative touch context sends every move frame to
+            // the remote pointer.  Do not turn a one-finger drag into a
+            // throttled wheel event when the peer is a desktop host.
+            await movePointer();
           }
           return;
         case _PointerContactMode.dragging:
@@ -382,8 +386,74 @@ class _RawTouchGestureDetectorRegionState
         _twoFingerTapMaxMovement = 0;
         _twoFingerTapScrollSent = false;
         _isTwoFingerTapCandidate = true;
+        _lastTwoFingerFocalPoint = _activeTouchFocalPoint;
+        _lastTwoFingerScrollTsUs = 0;
       } else if (_activeTouchPositions.length > 2) {
         _isTwoFingerTapCandidate = false;
+      }
+    }
+  }
+
+  Offset get _activeTouchFocalPoint {
+    if (_activeTouchPositions.isEmpty) return Offset.zero;
+    var sum = Offset.zero;
+    for (final position in _activeTouchPositions.values) {
+      sum += position;
+    }
+    return sum / _activeTouchPositions.length.toDouble();
+  }
+
+  Future<void> _handleAndroidTwoFingerMove() async {
+    if (!_isAndroidTouchMode || _activeTouchPositions.length != 2) return;
+
+    final delta = _activeTouchFocalPoint - _lastTwoFingerFocalPoint;
+    _lastTwoFingerFocalPoint = _activeTouchFocalPoint;
+    if (delta == Offset.zero || inputModel.isViewOnly) return;
+
+    // Keep the existing, verified two-finger wheel speed and natural direction.
+    // The difference is that the raw pointer frame is used directly, like
+    // Moonlight's MotionEvent path, instead of waiting for ScaleRecognizer.
+    if (delta.dx.abs() > delta.dy.abs()) {
+      _twoFingerScrollIntegralX += delta.dx;
+      _twoFingerScrollIntegralY = 0;
+    } else {
+      _twoFingerScrollIntegralY += delta.dy;
+      _twoFingerScrollIntegralX = 0;
+    }
+
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    final elapsedUs = _lastTwoFingerScrollTsUs == 0
+        ? 1000000
+        : nowUs - _lastTwoFingerScrollTsUs;
+    if (elapsedUs < _twoFingerScrollIntervalUs) return;
+
+    if (_twoFingerScrollIntegralY.abs() >= _twoFingerScrollThreshold) {
+      final steps = min(
+          4,
+          (_twoFingerScrollIntegralY.abs() / _twoFingerScrollThreshold)
+              .floor());
+      if (steps > 0) {
+        _twoFingerTapScrollSent = true;
+        await inputModel.scroll(_twoFingerScrollIntegralY.sign.toInt() * steps);
+        _twoFingerScrollIntegralY -=
+            _twoFingerScrollIntegralY.sign * steps * _twoFingerScrollThreshold;
+        _lastTwoFingerScrollTsUs = nowUs;
+      }
+      return;
+    }
+
+    if (_twoFingerScrollIntegralX.abs() >= _twoFingerScrollThreshold) {
+      final steps = min(
+          4,
+          (_twoFingerScrollIntegralX.abs() / _twoFingerScrollThreshold)
+              .floor());
+      if (steps > 0) {
+        _twoFingerTapScrollSent = true;
+        await inputModel.scroll(0,
+            x: _twoFingerScrollIntegralX.sign.toInt() * steps);
+        _twoFingerScrollIntegralX -=
+            _twoFingerScrollIntegralX.sign * steps * _twoFingerScrollThreshold;
+        _lastTwoFingerScrollTsUs = nowUs;
       }
     }
   }
@@ -392,6 +462,9 @@ class _RawTouchGestureDetectorRegionState
     if (event.kind == PointerDeviceKind.touch &&
         _activeTouchPositions.containsKey(event.pointer)) {
       _activeTouchPositions[event.pointer] = event.localPosition;
+      if (_isAndroidTouchMode && _activeTouchPositions.length == 2) {
+        unawaited(_handleAndroidTwoFingerMove());
+      }
       final contact = _touchContacts[event.pointer];
       if (_isAndroidTouchMode &&
           contact != null &&
@@ -415,6 +488,17 @@ class _RawTouchGestureDetectorRegionState
             kMouseEventTypePanUpdate,
             Offset(delta.dx.roundToDouble(), delta.dy.roundToDouble()),
           ),
+          movePointer: () async {
+            if (pointerInputModel.relativeMouseMode.value) {
+              await pointerInputModel.sendMobileRelativeMouseMove(
+                  event.delta.dx, event.delta.dy);
+            } else {
+              pointerInputModel.handleMouse(
+                InputModel.getMouseEventMove(),
+                event.localPosition,
+              );
+            }
+          },
           startDrag: () async {
             await pointerInputModel.sendMouse('down', MouseButtons.left);
           },
@@ -909,6 +993,9 @@ class _RawTouchGestureDetectorRegionState
     // Android: use the focal point (two-finger center) for wheel scrolling.
     // Pinch scale and canvas pan are intentionally ignored.
     if (isAndroid && !isDesktop && !isWebDesktop) {
+      // RawPointerMouseRegion now handles Android two-finger frames directly.
+      // Returning here prevents ScaleGestureRecognizer from duplicating them.
+      return;
       final delta = d.focalPoint - _lastTwoFingerFocalPoint;
       _lastTwoFingerFocalPoint = d.focalPoint;
 
@@ -1262,6 +1349,17 @@ class _RawPointerMouseRegionState extends State<RawPointerMouseRegion> {
                 kMouseEventTypePanUpdate,
                 Offset(delta.dx.roundToDouble(), delta.dy.roundToDouble()),
               ),
+              movePointer: () async {
+                if (pointerInputModel.relativeMouseMode.value) {
+                  await pointerInputModel.sendMobileRelativeMouseMove(
+                      evt.delta.dx, evt.delta.dy);
+                } else {
+                  pointerInputModel.handleMouse(
+                    InputModel.getMouseEventMove(),
+                    pointerInputModel.remoteCanvasPositionForPointer(evt),
+                  );
+                }
+              },
               startDrag: () async {
                 await pointerInputModel.sendMouse('down', MouseButtons.left);
               },
