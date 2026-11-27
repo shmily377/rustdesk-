@@ -147,10 +147,11 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
     };
   }
 
-  // FIXME: This debounce logic is not working properly.
-  // If we move our finger very fast, we won't be able to detect the "oneFingerPan" event sometimes.
+  // Start the one-finger gesture immediately.  Moonlight classifies the
+  // gesture directly from MotionEvent frames; delaying the start here can
+  // drop the first fast movement and makes touch scrolling feel sticky.
   void onOneFingerStartDebounce(ScaleUpdateDetails d) {
-    start(ScaleUpdateDetails d) {
+    void start(ScaleUpdateDetails d) {
       _currentState = GestureState.oneFingerPan;
       if (onOneFingerPanStart != null) {
         onOneFingerPanStart!(DragStartDetails(
@@ -158,15 +159,9 @@ class CustomTouchGestureRecognizer extends ScaleGestureRecognizer {
       }
     }
 
-    if (_currentState != GestureState.none) {
-      _debounceTimer = Timer(Duration(milliseconds: 200), () {
-        start(d);
-        debugPrint("debounce start oneFingerPan");
-      });
-    } else {
-      start(d);
-      debugPrint("start oneFingerPan");
-    }
+    _debounceTimer?.cancel();
+    start(d);
+    debugPrint("start oneFingerPan");
   }
 
   void onTwoFingerStartDebounce(ScaleUpdateDetails d) {
