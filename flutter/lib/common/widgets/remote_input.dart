@@ -195,10 +195,13 @@ class _PointerContact {
               updatePan(delta);
             }
           } else {
-            // Moonlight's relative touch context sends every move frame to
-            // the remote pointer.  Do not turn a one-finger drag into a
-            // throttled wheel event when the peer is a desktop host.
+            // Keep the pointer under the finger/stylus while also preserving
+            // touchpad-style page scrolling on desktop hosts.  The previous
+            // raw-pointer-only path moved the cursor but could never scroll
+            // webpages or documents.  Two-finger scrolling is handled by its
+            // separate path and is intentionally unchanged.
             await movePointer();
+            await scroll.add(delta, inputModel, updateCursor: updateCursor);
           }
           return;
         case _PointerContactMode.dragging:
