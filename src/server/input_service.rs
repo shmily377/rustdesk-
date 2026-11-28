@@ -1541,7 +1541,7 @@ fn handle_native_touch(frame: &NativeTouchFrame) {
         POINTER_FLAG_PRIMARY, POINTER_FLAG_NONE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
         POINTER_INFO, POINTER_TOUCH_INFO,
     };
-    use windows::Win32::UI::{Controls::POINTER_FEEDBACK_MODE, WindowsAndMessaging::PT_TOUCHPAD};
+    use windows::Win32::UI::{Controls::POINTER_FEEDBACK_MODE, WindowsAndMessaging::{POINTER_INPUT_TYPE, PT_TOUCHPAD}};
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -1701,7 +1701,7 @@ fn handle_native_touch(frame: &NativeTouchFrame) {
         .collect();
 
     if let Err(err) =
-        unsafe { windows::Win32::UI::Input::Pointer::InjectSyntheticPointerInput(&device, &pointer_type_info) }
+        unsafe { windows::Win32::UI::Input::Pointer::InjectSyntheticPointerInput(device, &pointer_type_info) }
     {
         log::warn!("InjectSyntheticPointerInput failed: {err}");
     }
