@@ -328,6 +328,9 @@ class _RawTouchGestureDetectorRegionState
   Offset? _lastTapDownPositionForMouseMode;
   // Cache global position for onTap (which lacks position info).
   Offset? _lastTapDownGlobalPosition;
+  // Cache the canvas pointer-down used by gesture callbacks to distinguish a
+  // tap on KeyHelpTools from a tap on the remote canvas.
+  PointerDownEvent? _lastPointerDownEvent;
 
   FFI get ffi => widget.ffi;
   FfiModel get ffiModel => widget.ffiModel;
@@ -369,6 +372,18 @@ class _RawTouchGestureDetectorRegionState
 
   bool get _useNativeTouch =>
       _isAndroidTouchMode && inputModel.peerPlatform != kPeerPlatformAndroid;
+
+  bool get _touchDownOnKeyHelpTools {
+    if (!_isAndroidTouchMode) return false;
+    final event = _lastPointerDownEvent;
+    if (event == null || event.kind != PointerDeviceKind.touch) {
+      return false;
+    }
+    return ffi.cursorModel.shouldBlock(
+      event.localPosition.dx,
+      event.localPosition.dy,
+    );
+  }
 
   Map<String, dynamic> _buildNativeTouchFrame(PointerEvent event) {
     if (_activeTouchPositions.containsKey(event.pointer)) {
@@ -483,6 +498,7 @@ class _RawTouchGestureDetectorRegionState
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    _lastPointerDownEvent = event;
     if (event.kind == PointerDeviceKind.touch) {
       _activeTouchPositions[event.pointer] = event.localPosition;
       if (_useNativeTouch && _activeTouchPositions.length < 2) {
@@ -803,6 +819,10 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onTapDown(TapDownDetails d) async {
+    if (_touchDownOnKeyHelpTools) {
+      _androidSingleFingerScrollHandled = false;
+      return;
+    }
     lastDeviceKind = d.kind;
     _lastTapDownGlobalPosition = d.globalPosition;
     if (isNotTouchBasedDevice()) {
@@ -846,6 +866,9 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onTap() async {
+    if (_touchDownOnKeyHelpTools) {
+      return;
+    }
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -900,6 +923,9 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onLongPressDown(LongPressDownDetails d) async {
+    if (_touchDownOnKeyHelpTools) {
+      return;
+    }
     lastDeviceKind = d.kind;
     if (isNotTouchBasedDevice()) {
       return;
@@ -934,6 +960,9 @@ class _RawTouchGestureDetectorRegionState
 
   // for mobiles
   onLongPress() async {
+    if (_touchDownOnKeyHelpTools) {
+      return;
+    }
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -1026,6 +1055,9 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onOneFingerPanStart(BuildContext context, DragStartDetails d) async {
+    if (_touchDownOnKeyHelpTools) {
+      return;
+    }
     final TapDownDetails? lastTapDownDetails = _lastTapDownDetails;
     _lastTapDownDetails = null;
     lastDeviceKind = d.kind ?? lastDeviceKind;

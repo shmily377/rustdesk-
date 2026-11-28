@@ -1108,11 +1108,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   child: ImagePaint(ffiModel: gFFI.ffiModel),
                 ),
         ),
-        Positioned.fill(
-          child: isAndroid
-              ? SafeArea(child: Stack(children: controls))
-              : Stack(children: controls),
-        ),
         if (showCursorPaint)
           Positioned.fill(
             child: isAndroid
@@ -1131,6 +1126,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           ),
         Positioned.fill(
           child: isAndroid ? SafeArea(child: floatingMouse) : floatingMouse,
+        ),
+        // Keep quality monitor, keyboard key help, and gesture help above the
+        // floating mouse layer.  A full-screen touch listener in the floating
+        // mouse layer can otherwise make the key help buttons unusable while
+        // the soft keyboard is visible.
+        Positioned.fill(
+          child: isAndroid
+              ? SafeArea(child: Stack(children: controls))
+              : Stack(children: controls),
         ),
       ]),
     );
