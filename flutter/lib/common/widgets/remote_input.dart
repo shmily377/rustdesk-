@@ -302,9 +302,6 @@ class _RawTouchGestureDetectorRegionState
   int _lastTwoFingerScrollTsUs = 0;
   final Map<int, Offset> _activeTouchPositions = {};
   final Map<int, Offset> _activeTouchRemotePositions = {};
-  // In native touch mode, two contacts become a touchpad gesture instead of
-  // raw touchscreen input. A single contact keeps native touchscreen behavior.
-  bool _nativeTouchTwoFingerMode = false;
   Map<int, Offset>? _twoFingerTapStartPositions;
   int _twoFingerTapStartTsUs = 0;
   double _twoFingerTapMaxMovement = 0;
@@ -449,65 +446,32 @@ class _RawTouchGestureDetectorRegionState
     );
   }
 
-  void _cancelNativeTouchContacts(PointerEvent event) {
-    // The second contact switches to touchpad mode before any raw pointer
-    // up frame can be sent. Release all pending native contacts to avoid
-    // stuck remote touch pointers when the touchpad gesture ends.
-    if (_activeTouchPositions.isNotEmpty) {
-      final rect = ffiModel.rect;
-      final width = max(1, rect?.width.round() ?? 1);
-      final height = max(1, rect?.height.round() ?? 1);
-      final points = <Map<String, dynamic>>[];
-      for (final entry in _activeTouchPositions.entries) {
-        final remotePosition = _activeTouchRemotePositions[entry.key];
-        if (remotePosition == null) {
-          continue;
-        }
-        points.add({
-          'id': entry.key,
-          'x': remotePosition.dx.round().clamp(0, width),
-          'y': remotePosition.dy.round().clamp(0, height),
-          'action': 2,
-          'pressure': 0,
-        });
-      }
-      if (points.isNotEmpty) {
-        final evt = PointerEventToRust(
-          kPointerEventKindTouch,
-          'native',
-          {'width': width, 'height': height, 'points': points},
-        ).toJson();
-        bind.sessionSendPointer(
-          sessionId: sessionId,
-          msg: json.encode(inputModel.modify(evt)),
-        );
-      }
-    }
-    final savedPositions = Map.of(_activeTouchPositions);
-    _resetNativeTouchState();
-    // Keep local tracking for the touchpad gesture; only remote raw contacts
-    // were released above.
-    _activeTouchPositions.addAll(savedPositions);
-    _nativeTouchTwoFingerMode = true;
-  }
-
   void _resetNativeTouchState() {
     _activeTouchPositions.clear();
     _activeTouchRemotePositions.clear();
-    _nativeTouchTwoFingerMode = false;
   }
 
   void _onPointerDown(PointerDownEvent event) {
     _lastPointerDownEvent = event;
     if (event.kind == PointerDeviceKind.touch) {
       _activeTouchPositions[event.pointer] = event.localPosition;
-      if (_useNativeTouch && _activeTouchPositions.length < 2) {
+      if (_activeTouchPositions.length == 1) {
+        _twoFingerTapStartPositions = {event.pointer: event.localPosition};
+        _twoFingerTapStartTsUs =
+            DateTime.now().microsecondsSinceEpoch;
+        _twoFingerTapMaxMovement = 0;
+        _twoFingerTapScrollSent = false;
+        _isTwoFingerTapCandidate = true;
+      } else if (_activeTouchPositions.length == 2) {
+        _twoFingerTapStartPositions?[event.pointer] = event.localPosition;
+      } else {
+        _isTwoFingerTapCandidate = false;
+      }
+      // Native mode sends every contact as real multi-touch input, including
+      // two simultaneous fingers.  Do not convert it into a touchpad gesture.
+      if (_useNativeTouch) {
         _sendNativeTouchFrame(event);
         return;
-      }
-      if (_useNativeTouch && _activeTouchPositions.length >= 2) {
-        _nativeTouchTwoFingerMode = true;
-        _cancelNativeTouchContacts(event);
       }
       if (_isAndroidTouchMode && _activeTouchPositions.length == 1) {
         _androidSingleFingerScrollHandled = false;
@@ -621,7 +585,7 @@ class _RawTouchGestureDetectorRegionState
     if (event.kind == PointerDeviceKind.touch &&
         _activeTouchPositions.containsKey(event.pointer)) {
       _activeTouchPositions[event.pointer] = event.localPosition;
-      if (_useNativeTouch && !_nativeTouchTwoFingerMode) {
+      if (_useNativeTouch) {
         _sendNativeTouchFrame(event);
         return;
       }
@@ -707,8 +671,34 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     _activeTouchPositions[event.pointer] = event.localPosition;
-    if (_useNativeTouch && !_nativeTouchTwoFingerMode) {
+    if (_useNativeTouch) {
       _sendNativeTouchFrame(event);
+      _activeTouchPositions.remove(event.pointer);
+      _activeTouchRemotePositions.remove(event.pointer);
+      final startPositions = _twoFingerTapStartPositions;
+      final startPosition = startPositions?[event.pointer];
+      if (startPosition != null) {
+        _twoFingerTapMaxMovement = max(
+            _twoFingerTapMaxMovement,
+            (event.localPosition - startPosition).distance);
+      }
+      if (_activeTouchPositions.isEmpty &&
+          _isAndroidTouchMode &&
+          _isTwoFingerTapCandidate &&
+          !_twoFingerTapScrollSent &&
+          DateTime.now().microsecondsSinceEpoch - _twoFingerTapStartTsUs <=
+              250000 &&
+          _twoFingerTapMaxMovement <= 20) {
+        _resetTwoFingerTapState();
+        unawaited(inputModel.tap(MouseButtons.right));
+        return;
+      }
+      if (_activeTouchPositions.isEmpty) {
+        _resetTwoFingerTapState();
+      } else {
+        // Keep the two-finger tap candidate alive until the last finger
+        // lifts, otherwise a genuine two-finger tap would never fire.
+      }
       return;
     }
     final startPositions = _twoFingerTapStartPositions;
@@ -721,12 +711,6 @@ class _RawTouchGestureDetectorRegionState
       }
     }
     _activeTouchPositions.remove(event.pointer);
-
-    if (_useNativeTouch && _nativeTouchTwoFingerMode) {
-      _resetNativeTouchState();
-      return;
-    }
-
     if (_activeTouchPositions.isNotEmpty) return;
 
     final durationUs =
@@ -757,16 +741,11 @@ class _RawTouchGestureDetectorRegionState
       _androidSingleFingerScrollHandled = true;
     }
     _activeTouchPositions[event.pointer] = event.localPosition;
-    if (_useNativeTouch && !_nativeTouchTwoFingerMode) {
+    if (_useNativeTouch) {
       _sendNativeTouchFrame(event);
       return;
     }
     _activeTouchPositions.remove(event.pointer);
-    if (_useNativeTouch && _nativeTouchTwoFingerMode) {
-      _resetNativeTouchState();
-      return;
-    }
-
     if (_activeTouchPositions.isEmpty) {
       _resetTwoFingerTapState();
     } else {
@@ -1164,6 +1143,9 @@ class _RawTouchGestureDetectorRegionState
   // scale + pan event
   onTwoFingerScaleStart(ScaleStartDetails d) async {
     _lastTapDownDetails = null;
+    if (_useNativeTouch) {
+      return;
+    }
     if (isNotTouchBasedDevice()) {
       return;
     }
@@ -1191,6 +1173,9 @@ class _RawTouchGestureDetectorRegionState
 
   onTwoFingerScaleUpdate(ScaleUpdateDetails d) async {
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    if (_useNativeTouch) {
       return;
     }
     if (inputModel.isViewOnly) return;
@@ -1254,6 +1239,9 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onTwoFingerScaleCancel(ScaleEndDetails d) async {
+    if (_useNativeTouch) {
+      return;
+    }
     if (isAndroid && !isDesktop && !isWebDesktop) {
       if (!widget.isCamera) {
         await bind.sessionSendPointer(
@@ -1273,6 +1261,9 @@ class _RawTouchGestureDetectorRegionState
 
   onTwoFingerScaleEnd(ScaleEndDetails d) async {
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    if (_useNativeTouch) {
       return;
     }
     if (isAndroid && !isDesktop && !isWebDesktop) {

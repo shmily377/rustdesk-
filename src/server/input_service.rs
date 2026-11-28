@@ -1535,16 +1535,41 @@ fn handle_scale(scale: i32) {
 #[cfg(target_os = "windows")]
 fn handle_native_touch(frame: &NativeTouchFrame) {
     use std::sync::OnceLock;
-    use windows::Win32::UI::{
-        Input::Pointer::{
-            self, InjectTouchInput, InitializeTouchInjection, POINTER_FLAG_CANCELED,
-            POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE, POINTER_FLAG_PRIMARY,
-            POINTER_FLAG_NONE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_TOUCH_INFO,
-        },
-        WindowsAndMessaging::{PT_TOUCH, TOUCH_FLAG_NONE, TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE},
+    use windows::Win32::Foundation::{FARPROC, POINT};
+    use windows::Win32::UI::Input::Pointer::{
+        POINTER_FLAG_CANCELED, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT, POINTER_FLAG_INRANGE,
+        POINTER_FLAG_PRIMARY, POINTER_FLAG_NONE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE,
+        POINTER_INFO, POINTER_TOUCH_INFO,
     };
+    use windows::Win32::UI::{Controls::POINTER_FEEDBACK_MODE, WindowsAndMessaging::PT_TOUCHPAD};
 
-    const MAX_TOUCH_CONTACTS: u32 = 256;
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct SyntheticDeviceCreationParams {
+        pointer_type: POINTER_INPUT_TYPE,
+        max_count: u32,
+        feedback_mode: POINTER_FEEDBACK_MODE,
+        h_monitor: windows::Win32::Foundation::HANDLE,
+        device_width: u32,
+        device_height: u32,
+        options: u32,
+    }
+
+    type CreateSyntheticPointerDevice2Fn =
+        unsafe extern "system" fn(*const SyntheticDeviceCreationParams) -> windows::Win32::Foundation::HANDLE;
+
+    // 5 contacts is the Windows precision touchpad maximum.
+    const MAX_TOUCHPAD_CONTACTS: u32 = 5;
+    // 120 x 80 mm, the same aspect ratio and scale range as most laptops.
+    const TOUCHPAD_WIDTH_HIMETRIC: u32 = 12_000;
+    const TOUCHPAD_HEIGHT_HIMETRIC: u32 = 8_000;
+    const SDCO_PHYSICAL_SIZE: u32 = 0x1;
+
+    // HSYNTHETICPOINTERDEVICE is a raw pointer and is not marked Send; keep
+    // the numeric handle so the static stays Sync.
+    static DEVICE: OnceLock<Result<usize, String>> = OnceLock::new();
+    static INIT_FAILED: OnceLock<()> = OnceLock::new();
+
     let contacts: Vec<POINTER_TOUCH_INFO> = frame
         .points
         .iter()
@@ -1579,39 +1604,32 @@ fn handle_native_touch(frame: &NativeTouchFrame) {
                 _ => return None,
             };
 
-            let contact = POINTER_TOUCH_INFO {
-                pointerInfo: windows::Win32::UI::Input::Pointer::POINTER_INFO {
-                    pointerType: PT_TOUCH,
-                    pointerId: id as u32,
-                    pointerFlags: pointer_flags,
-                    ptPixelLocation: windows::Win32::Foundation::POINT {
-                        x: point.x,
-                        y: point.y,
-                    },
-                    ..Default::default()
+            // Synthetic touchpad devices do not support feedback. They only
+            // need the pointer info itself; the Windows touchpad recognizer
+            // handles two-finger pan and pinch from the contact stream.
+            let pointer_info = POINTER_INFO {
+                pointerType: PT_TOUCHPAD,
+                pointerId: id as u32,
+                pointerFlags: pointer_flags,
+                ptHimetricLocation: POINT {
+                    x: (point.x as i64 * TOUCHPAD_WIDTH_HIMETRIC as i64
+                        / frame.width.max(1) as i64) as i32,
+                    y: (point.y as i64 * TOUCHPAD_HEIGHT_HIMETRIC as i64
+                        / frame.height.max(1) as i64) as i32,
                 },
-                touchFlags: TOUCH_FLAG_NONE,
-                touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
-                rcContact: windows::Win32::Foundation::RECT {
-                    left: point.x - 8,
-                    top: point.y - 8,
-                    right: point.x + 8,
-                    bottom: point.y + 8,
+                ptHimetricLocationRaw: POINT {
+                    x: (point.x as i64 * TOUCHPAD_WIDTH_HIMETRIC as i64
+                        / frame.width.max(1) as i64) as i32,
+                    y: (point.y as i64 * TOUCHPAD_HEIGHT_HIMETRIC as i64
+                        / frame.height.max(1) as i64) as i32,
                 },
-                rcContactRaw: windows::Win32::Foundation::RECT {
-                    left: point.x - 8,
-                    top: point.y - 8,
-                    right: point.x + 8,
-                    bottom: point.y + 8,
-                },
-                orientation: 0,
-                pressure: if point.pressure <= 0 {
-                    512
-                } else {
-                    point.pressure.clamp(0, 1024) as u32
-                },
+                ..Default::default()
             };
-            Some(contact)
+
+            Some(POINTER_TOUCH_INFO {
+                pointerInfo: pointer_info,
+                ..Default::default()
+            })
         })
         .collect();
 
@@ -1619,21 +1637,73 @@ fn handle_native_touch(frame: &NativeTouchFrame) {
         return;
     }
 
-    static INITIALIZED: OnceLock<()> = OnceLock::new();
-    if INITIALIZED.get().is_none() {
-        match unsafe { InitializeTouchInjection(MAX_TOUCH_CONTACTS, Pointer::TOUCH_FEEDBACK_NONE) } {
-            Ok(()) => {
-                let _ = INITIALIZED.set(());
-            }
-            Err(err) => {
-                log::warn!("InitializeTouchInjection failed: {err}");
-                return;
-            }
-        }
+    if INIT_FAILED.get().is_some() {
+        return;
     }
 
-    if let Err(err) = unsafe { InjectTouchInput(&contacts) } {
-        log::warn!("InjectTouchInput failed: {err}");
+    let device = DEVICE.get_or_init(|| unsafe {
+        let user32 = windows::Win32::System::LibraryLoader::GetModuleHandleA(
+            windows::core::PCSTR::null(),
+        )
+        .map_err(|e| format!("GetModuleHandleA failed: {e}"))?;
+        let proc: FARPROC = windows::Win32::System::LibraryLoader::GetProcAddress(
+            user32,
+            windows::core::PCSTR::from_raw(b"CreateSyntheticPointerDevice2\0".as_ptr()),
+        );
+        let proc = proc
+            .ok_or_else(|| "CreateSyntheticPointerDevice2 unavailable".to_string())?;
+        let create: CreateSyntheticPointerDevice2Fn =
+            std::mem::transmute(proc);
+
+        let params = SyntheticDeviceCreationParams {
+            pointer_type: PT_TOUCHPAD,
+            max_count: MAX_TOUCHPAD_CONTACTS,
+            feedback_mode: POINTER_FEEDBACK_MODE(3), // POINTER_FEEDBACK_NONE
+            h_monitor: windows::Win32::Foundation::HANDLE::default(),
+            device_width: TOUCHPAD_WIDTH_HIMETRIC,
+            device_height: TOUCHPAD_HEIGHT_HIMETRIC,
+            // Without SDCO_TOUCHPAD_GESTURE_ONLY the system treats injected
+            // input identically to a physical touchpad: one finger moves the
+            // cursor and can click, two fingers are pan/pinch gestures. This
+            // matches the behavior the user expects.
+            options: SDCO_PHYSICAL_SIZE,
+        };
+
+        let handle = create(&params);
+        if handle.is_invalid() {
+            return Err(format!(
+                "CreateSyntheticPointerDevice2 failed: {:?}",
+                windows::Win32::Foundation::GetLastError()
+            ));
+        }
+        Ok(handle.0 as usize)
+    });
+
+    let device = match device {
+        Ok(device) => windows::Win32::UI::Controls::HSYNTHETICPOINTERDEVICE(
+            *device as *mut core::ffi::c_void,
+        ),
+        Err(err) => {
+            let _ = INIT_FAILED.set(());
+            log::warn!("synthetic touchpad unavailable: {err}");
+            return;
+        }
+    };
+
+    let pointer_type_info: Vec<windows::Win32::UI::Controls::POINTER_TYPE_INFO> = contacts
+        .into_iter()
+        .map(|contact| windows::Win32::UI::Controls::POINTER_TYPE_INFO {
+            r#type: PT_TOUCHPAD,
+            Anonymous: windows::Win32::UI::Controls::POINTER_TYPE_INFO_0 {
+                touchInfo: contact,
+            },
+        })
+        .collect();
+
+    if let Err(err) =
+        unsafe { windows::Win32::UI::Input::Pointer::InjectSyntheticPointerInput(&device, &pointer_type_info) }
+    {
+        log::warn!("InjectSyntheticPointerInput failed: {err}");
     }
 }
 
